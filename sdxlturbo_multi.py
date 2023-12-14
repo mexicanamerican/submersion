@@ -19,6 +19,8 @@ import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
+import random as rn
+import numpy as np
 
 from prompt_blender import PromptBlender
 
@@ -58,11 +60,25 @@ pipe.set_progress_bar_config(disable=True)
 blender = PromptBlender(pipe)
 prompts = ["a man walking through the forest", "a man walking through the desert", "a man walking through the village", "a man walking through the war in the village","a man walking through the war in the village with explosions","a man walking through the destructed village, dead bodies, gore" , "a man walking through the desert", "a man walking through the forest"]
 prompts = ["a cat", "a dog", "a bird", "a fish","a whale"]
-n_steps = 100
+prompts = ["photorealistic gore scene nsfw, blood", 'photorealistic gore scene nsfw, blood, multiple people, horror']
+
+
+a = 1
+b = 101
+prompts = [
+    f'scene: a green field, detail: clouds {nmb}'
+    for nmb in [rn.randint(a, b) for _ in range(100)]
+] + [
+    f'scene: a green field, detail: flowers {nmb}'
+    for nmb in [rn.randint(a, b) for _ in range(100)]
+]
+
+
+#prompts = [f'{nmb} arm' for nmb in range(100)]
+# prompts = ["a cat eating", "a cat running", "a cat sleeping", "a cat snoring"]
+n_steps = 10
 blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
-
-#%%
 
 # Image generation pipeline
 sz = (512, 512)
@@ -72,7 +88,7 @@ latents = torch.randn((1,4,64,64)).half().cuda()
 # Iterate over blended prompts
 for i in range(len(blended_prompts) - 1):
     fract = float(i) / (len(blended_prompts) - 1)
-    blended = blend_prompts(blended_prompts[i], blended_prompts[i+1], fract)
+    blended = blender.blend_prompts(blended_prompts[i], blended_prompts[i+1], fract)
 
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blended
 
