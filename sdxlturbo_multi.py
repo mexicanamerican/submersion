@@ -29,7 +29,6 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 
-#%%
 # config = CompilationConfig.Default()
 
 # config.enable_xformers = True
@@ -59,19 +58,25 @@ pipe.set_progress_bar_config(disable=True)
 # Example usage
 blender = PromptBlender(pipe)
 prompts = ["a man walking through the forest", "a man walking through the desert", "a man walking through the village", "a man walking through the war in the village","a man walking through the war in the village with explosions","a man walking through the destructed village, dead bodies, gore" , "a man walking through the desert", "a man walking through the forest"]
-prompts = ["a cat", "a dog", "a bird", "a fish","a whale"]
-prompts = ["photorealistic gore scene nsfw, blood", 'photorealistic gore scene nsfw, blood, multiple people, horror']
+# prompts = ["a cat", "a dog", "a bird", "a fish","a whale"]
+prompts = ["galaxy","solar system","planet","aerial photo of the forest","branches and leaves","plant cell","atomic structure"]
+# prompts = ["photorealistic gore scene nsfw, blood", 'photorealistic gore scene nsfw, blood, multiple people, horror']
 
+prompts = ["close up photo of an alien jungle, 4K, photorealistic, cinematic, dense forestation, intricate roots",
+           "close up photo of an alien jungle, 4K, photorealistic, cinematic, dense forestation, intricate roots, night",
+           "close up photo of an alien jungle, 4K, photorealistic, cinematic, dense forestation, intricate roots, night, shades of red and blue light"]
 
-a = 1
-b = 101
-prompts = [
-    f'scene: a green field, detail: clouds {nmb}'
-    for nmb in [rn.randint(a, b) for _ in range(100)]
-] + [
-    f'scene: a green field, detail: flowers {nmb}'
-    for nmb in [rn.randint(a, b) for _ in range(100)]
-]
+prompts = ["psychedelic, fractal, hyperbolic, sacred geometry, lsd, acid {nmb}" for nmb in range(100)]
+
+# a = 1
+# b = 101
+# prompts = [
+#     f'scene: a green field, detail: clouds {nmb}'
+#     for nmb in [rn.randint(a, b) for _ in range(100)]
+# ] + [
+#     f'scene: a green field, detail: flowers {nmb}'
+#     for nmb in [rn.randint(a, b) for _ in range(100)]
+# ]
 
 
 #prompts = [f'{nmb} arm' for nmb in range(100)]

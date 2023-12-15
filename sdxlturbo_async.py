@@ -43,27 +43,36 @@ async def prompt_input_loop(blender, update_event):
         new_prompt = await asyncio.to_thread(input, "Enter new prompt: ")
         blender.add_prompt(new_prompt)
         update_event.set()  # Signal that a new prompt has been added
-
+        
+        
 async def render_loop(blender, pipe, update_event):
     sz = (512, 512)
     renderer = lt.Renderer(width=sz[1], height=sz[0])
     latents = torch.randn((1, 4, 64, 64)).half().cuda()
 
+    current_index = 0  # Track the current position in the prompt sequence
+
     while True:
         # Check if there's a new prompt to blend
         if update_event.is_set():
             update_event.clear()  # Reset the event
+            # Ensure current index is within the new range of prompts
+            current_index = min(current_index, len(blender.blended_prompts) - 2)
 
-        # Continue rendering with the current blended prompts
-        for i in range(len(blender.blended_prompts) - 1):
-            fract = float(i) / (len(blender.blended_prompts) - 1)
-            blended = blender.blend_prompts(blender.blended_prompts[i], blender.blended_prompts[i+1], fract)
+        # Blend from the current prompt to the next one
+        if current_index < len(blender.blended_prompts) - 1:
+            fract = 0.5  # Or any other logic to determine the blending fraction
+            blended = blender.blend_prompts(blender.blended_prompts[current_index], blender.blended_prompts[current_index + 1], fract)
 
             prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blended
             image = pipe(guidance_scale=0.0, num_inference_steps=1, latents=latents, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
             renderer.render(image.rotate(90))
 
+            # Update the current index to move to the next prompt
+            current_index += 1
+
         await asyncio.sleep(0.1)  # Short delay to yield control
+
 
 async def main():
     initial_prompts = ["initial prompt 1", "initial prompt 2"]
