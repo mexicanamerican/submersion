@@ -78,7 +78,8 @@ async def render_loop(blender, pipe, update_event):
 
     current_index = 0  # Track the current position in the prompt sequence
 
-    while True:
+    while True:processed_prompt_input_loop(blender, update_event))
+    render_task = asyncio.create_task
         # Check if there's a new prompt to blend
         if update_event.is_set():
             update_event.clear()  # Reset the event
