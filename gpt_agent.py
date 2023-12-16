@@ -20,7 +20,7 @@ client = OpenAI(api_key=api_key)
 # assistant id: asst_KrxchcAzg9rO4T0If7wwg2sx
 
 class GPTAgent:
-    def __init__(self, model, name, instructions, assistant_id = None):
+    def __init__(self, model = None, name = None, instructions = None, assistant_id = None):
         api_key = read_api_key('OPEN_AI_KEY')
         self.client = OpenAI(api_key=api_key)
         self.current_run_id = None
@@ -94,30 +94,24 @@ class GPTAgent:
 
 
 
-#%% exampleasst_KrxchcAzg9rO4T0If7wwg2sx
 
-
-# Custom model name and instructions
+#%%
+# Custom model name and instructions - create a new agent
 model_name = "gpt-4-1106-preview"
 agent_name = "Ocean Painter"
 instructions = "change the sentence 'an ocean seen from above' so as to portray the emotion of the prompt. for example, if you receive the message 'I am angry' you should output 'a red ocean seen from above'. only give the output description of the ocean- prompt: "
+
+# use the assistant ID if you already created it previously
 assistant_id = 'asst_KrxchcAzg9rO4T0If7wwg2sx'
-gpt_agent = GPTAgent(model=model_name, name = agent_name, instructions=instructions, assistant_id = assistant_id)
+gpt = GPTAgent(model=model_name, name = agent_name, instructions=instructions, assistant_id = assistant_id)
 
 #%%
-message = gpt_agent.send_message("I feel furious and filled with imense rage")
+message = gpt.send_message("I feel furious and filled with imense rage")
 run_instructions = ""
-run = gpt_agent.execute_run(run_instructions)
-gpt_agent.wait_for_run_completion()
-last_reply = gpt_agent.get_all_replies()[0]
-print(last_reply)
-#%%
-print(gpt_agent.get_all_replies()[0])
+run = gpt.execute_run(run_instructions)
+gpt.wait_for_run_completion()
+last_reply = gpt.get_all_replies()[0]
 
-
-#%%
-
-gpt_agent.execute_run("Please provide a summary of the latest tech news.")
 
 
 

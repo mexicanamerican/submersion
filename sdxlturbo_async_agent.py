@@ -27,6 +27,8 @@ import asyncio
 from prompt_blender import PromptBlender
 from prompt_blender import PromptBlenderAsync
 
+from gpt_agent import GPTAgent
+
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -37,29 +39,28 @@ pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
-#%%
-
-
 
 #%%
-
-def prompt_processing(gpt4, msg_prompt):
-    i_prompt = ["change the sentence 'an ocean seen from above' so as to portray the emotion of the prompt. for example, if you receive the prompt 'I am angry' you should output 'a red ocean seen from above'. only give the output - prompt: "]
-    api_prompt = i_prompt[0] + msg_prompt[0]
-    print(msg_prompt)
-    processed_prompt = gpt4.generate(api_prompt)
-    #print(processed_prompt)
-    return processed_prompt
+# load a premade assistant
+assistant_id = 'asst_KrxchcAzg9rO4T0If7wwg2sx'
+gpt = GPTAgent(assistant_id = assistant_id)
 
 #%%
 
-async def processed_prompt_input_loop(blender, update_event):
+def prompt_processing(gpt, msg_prompt):
+    message = gpt.send_message(msg_prompt)
+    run = gpt.execute_run("")
+    gpt.wait_for_run_completion()
+    return gpt.get_all_replies()[0]
+    
+
+#%%
+
+async def processed_prompt_input_loop(gpt, blender, update_event):
     while True:
         
         new_prompt = await asyncio.to_thread(input, "Enter new prompt: ")
-        print(new_prompt)
-        processed_prompt = prompt_processing(new_prompt)  # Process the new prompt
-        print(processed_prompt)
+        processed_prompt = prompt_processing(gpt, new_prompt)  # Process the new prompt
         blender.add_prompt(processed_prompt)  # Add the processed prompt
         update_event.set()  # Signal that a new prompt has been added
 
@@ -101,17 +102,19 @@ async def render_loop(blender, pipe, update_event):
 
 async def main():
     initial_prompts = ["a pink and blue ocean seen from above", "a pink and blue ocean seen from above"]
-    n_steps = 100
+    n_steps = 50
     blender = PromptBlenderAsync(pipe, initial_prompts, n_steps)
     update_event = asyncio.Event()
     
 
     # Start the asynchronous loops
-    input_task = asyncio.create_task(processed_prompt_input_loop(blender, update_event))
+    input_task = asyncio.create_task(processed_prompt_input_loop(gpt, blender, update_event))
     render_task = asyncio.create_task(render_loop(blender, pipe, update_event))
 
     # Run both tasks concurrently
     await asyncio.gather(input_task, render_task)
+
+#%%
 
 # Get the current event loop and run the main function
 loop = asyncio.get_event_loop()
