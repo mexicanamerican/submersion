@@ -68,6 +68,7 @@ from nltk.corpus import wordnet as wn
 nouns = list(wn.all_synsets('n'))
 nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
+# base = 'skeleton person head skull terrifying'
 base = 'very bizarre and grotesque zombie monster'
 
 tp = 150
