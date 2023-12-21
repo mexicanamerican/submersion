@@ -22,6 +22,11 @@ import cv2
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, AutoencoderKL
 from prompt_blender import PromptBlender
 
+#%%
+# ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
+ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
+
+
 shape_cam=(600,800) 
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
 cam_man.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
@@ -34,8 +39,14 @@ torch.backends.cudnn.allow_tf32 = False
 use_maxperf = False
 
 # initialize the models and pipeline
-ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
-controlnet = ControlNetModel.from_pretrained(ctrlnet_type, torch_dtype=torch.float16)
+
+controlnet = ControlNetModel.from_pretrained(
+    ctrlnet_type,
+    variant="fp16",
+    use_safetensors=True,
+    torch_dtype=torch.float16,
+).to("cuda")
+
 pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", controlnet=controlnet, torch_dtype=torch.float16, variant="fp16")
 pipe = pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
@@ -57,15 +68,41 @@ if use_maxperf:
     pipe = compile(pipe, config)
 
 #%%
-def process_cam_image(ctrl_image):
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
+depth_estimator = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to("cuda")
+feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
+
+def process_cam_image(ctrl_image, ctrlnet_type):
     ctrl_image = center_crop_and_resize(ctrl_image)
     ctrl_image = np.array(ctrl_image)
-    low_threshold = 100
-    high_threshold = 200
-    ctrl_image = cv2.Canny(ctrl_image, low_threshold, high_threshold)
-    ctrl_image = ctrl_image[:, :, None]
-    ctrl_image = np.concatenate([ctrl_image, ctrl_image, ctrl_image], axis=2)
-    ctrl_image = Image.fromarray(ctrl_image)
+    
+    if ctrlnet_type == "diffusers/controlnet-canny-sdxl-1.0":
+        low_threshold = 100
+        high_threshold = 200
+        ctrl_image = cv2.Canny(ctrl_image, low_threshold, high_threshold)
+        ctrl_image = ctrl_image[:, :, None]
+        ctrl_image = np.concatenate([ctrl_image, ctrl_image, ctrl_image], axis=2)
+        ctrl_image = Image.fromarray(ctrl_image)
+    else:
+        image = feature_extractor(images=ctrl_image, return_tensors="pt").pixel_values.to("cuda")
+        with torch.no_grad(), torch.autocast("cuda"):
+            depth_map = depth_estimator(image).predicted_depth
+    
+        depth_map = torch.nn.functional.interpolate(
+            depth_map.unsqueeze(1),
+            size=(512, 512),
+            mode="bicubic",
+            align_corners=False,
+        )
+        depth_min = torch.amin(depth_map, dim=[1, 2, 3], keepdim=True)
+        depth_max = torch.amax(depth_map, dim=[1, 2, 3], keepdim=True)
+        depth_map = (depth_map - depth_min) / (depth_max - depth_min)
+        image = torch.cat([depth_map] * 3, dim=1)
+    
+        image = image.permute(0, 2, 3, 1).cpu().numpy()[0]
+        image = Image.fromarray((image * 255.0).clip(0, 255).astype(np.uint8))
+        ctrl_image = image
+        
     return ctrl_image
 
 def center_crop_and_resize(img, size=(512, 512)):
@@ -97,9 +134,6 @@ def center_crop_and_resize(img, size=(512, 512)):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-# Usage example:
-# center_crop_and_resize("your_image.jpg", "output_image.jpg", size=(512, 512))
-
 # Example usage
 blender = PromptBlender(pipe)
 
@@ -109,6 +143,7 @@ nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
 base = 'very bizarre and grotesque zombie monster'
+base = 'very bizarre robot monster'
 
 tp = 150
 prompts = []
@@ -140,12 +175,17 @@ while True:
         cam_img = np.flip(cam_img, axis=1)
         cam_img = Image.fromarray(np.uint8(cam_img))
         
-        ctrl_img = process_cam_image(cam_img)
+        ctrl_img = process_cam_image(cam_img, ctrlnet_type)
         
-        
-        # Generate the image using your pipeline
-        # image = pipe(image=image, latents=latents, num_inference_steps=2, strength=0.999, guidance_scale=0.5, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
         image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=4, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+        
         # Render the image
         renderer.render(image)
         
+"""
+WISHLIST
+- threaded controlnet computation
+- other controlnets
+- mess with more prompts
+
+"""
