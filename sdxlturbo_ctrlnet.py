@@ -27,10 +27,11 @@ from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
 # ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
 ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
-use_maxperf = True
+use_maxperf = False
 shape_cam=(600,800)
 size_ctrl_img = (512, 512) 
-num_inference_steps = 1
+num_inference_steps = 2
+controlnet_conditioning_scale = 0.3
 
 # %% INITS
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
@@ -146,7 +147,8 @@ nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
 base = 'very bizarre and grotesque zombie monster'
-base = 'a funny frog'
+# base = 'very bizarre soldier'
+# base = 'a funny frog'
 
 tp = 150
 prompts = []
@@ -157,7 +159,7 @@ n_steps = 30
 blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
 # Image generation pipeline
-controlnet_conditioning_scale = 0.5
+
 
 sz = (size_ctrl_img[0]*2, size_ctrl_img[1]*2)
 renderer = lt.Renderer(width=sz[1], height=sz[0])
