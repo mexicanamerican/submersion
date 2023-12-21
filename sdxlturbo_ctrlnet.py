@@ -25,13 +25,14 @@ from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
 #%% PARAMETERS
 
-# ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
-ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
+ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
+# ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
 use_maxperf = False
 shape_cam=(600,800)
 size_ctrl_img = (512, 512) 
 num_inference_steps = 2
-controlnet_conditioning_scale = 0.3
+controlnet_conditioning_scale = 0.45
+stitch_cam = True
 
 # %% INITS
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
@@ -74,10 +75,24 @@ if use_maxperf:
 
 #%%
 
+def stitch_images(img1, img2):
+    # Determine the size for the new image
+    width1, height1 = img1.size
+    width2, height2 = img2.size
+    new_width = width1 + width2
+    new_height = max(height1, height2)
+
+    # Create a new image with appropriate size
+    new_img = Image.new('RGB', (new_width, new_height))
+
+    # Paste the images side by side
+    new_img.paste(img1, (0, 0))
+    new_img.paste(img2, (width1, 0))
+
+    return new_img
 
 
 def process_cam_image(ctrl_image, ctrlnet_type):
-    ctrl_image = center_crop_and_resize(ctrl_image)
     ctrl_image = np.array(ctrl_image)
     
     if ctrlnet_type == "diffusers/controlnet-canny-sdxl-1.0":
@@ -147,8 +162,16 @@ nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
 base = 'very bizarre and grotesque zombie monster'
-# base = 'very bizarre soldier'
-# base = 'a funny frog'
+base = 'very bizarre alien with spaceship background'
+base = 'a funny weird frog'
+base = 'metal steampunk gardener'
+base = 'a strange city'
+base = 'a beautiful redhaired mermaid'
+base = 'a gangster party'
+base = 'terror pig party'
+base = 'dirty and slimy bug monster'
+base = 'a telepathic cyborg steampunk'
+base = 'a man wearing very expensive and elegant attire'
 
 tp = 150
 prompts = []
@@ -162,7 +185,13 @@ blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
 
 sz = (size_ctrl_img[0]*2, size_ctrl_img[1]*2)
-renderer = lt.Renderer(width=sz[1], height=sz[0])
+if stitch_cam:
+    width_renderer = width=2*sz[1]
+else:
+    width_renderer = width=1*sz[1]
+    
+renderer = lt.Renderer(width=width_renderer, height=sz[0])
+    
 latents = torch.randn((1,4,64//1,64)).half().cuda()
 
 # Iterate over blended prompts
@@ -180,12 +209,15 @@ while True:
         cam_img = cam_man.get_img()
         cam_img = np.flip(cam_img, axis=1)
         cam_img = Image.fromarray(np.uint8(cam_img))
+        cam_img = center_crop_and_resize(cam_img)
         
         ctrl_img = process_cam_image(cam_img, ctrlnet_type)
         
         image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
         
         # Render the image
+        if stitch_images:
+            image = stitch_images(cam_img, image)
         renderer.render(image)
         
 """
