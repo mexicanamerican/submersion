@@ -22,6 +22,7 @@ import cv2
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, AutoencoderKL
 from prompt_blender import PromptBlender
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
+from pynput import keyboard  # Import the pynput.keyboard module
 
 #%% PARAMETERS
 
@@ -32,7 +33,7 @@ shape_cam=(600,800)
 size_ctrl_img = (512, 512) 
 num_inference_steps = 2
 controlnet_conditioning_scale = 0.45
-stitch_cam = True
+stitch_cam = False
 
 # %% INITS
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
@@ -74,7 +75,22 @@ if use_maxperf:
     pipe = compile(pipe, config)
 
 #%%
+# Flags for key presses
+recording = False
+stop_recording = False
 
+# Function to handle key press
+def on_press(key):
+    global recording, stop_recording
+    if key == keyboard.Key.space:
+        recording = True
+    elif key == keyboard.Key.enter:
+        stop_recording = True
+
+# Set up keyboard listener
+listener = keyboard.Listener(on_press=on_press)
+listener.start()
+    
 def stitch_images(img1, img2):
     # Determine the size for the new image
     width1, height1 = img1.size
@@ -153,6 +169,17 @@ def center_crop_and_resize(img, size=(512, 512)):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+
+def get_control_img(cam_img, ctrlnet_type):
+    cam_img = np.flip(cam_img, axis=1)
+    cam_img = Image.fromarray(np.uint8(cam_img))
+    cam_img = center_crop_and_resize(cam_img)
+    
+    ctrl_img = process_cam_image(cam_img, ctrlnet_type)
+    return ctrl_img
+
+
+#%%
 # Example usage
 blender = PromptBlender(pipe)
 
@@ -161,25 +188,33 @@ nouns = list(wn.all_synsets('n'))
 nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
-base = 'very bizarre and grotesque zombie monster'
-base = 'very bizarre alien with spaceship background'
-base = 'a funny weird frog'
-base = 'metal steampunk gardener'
-base = 'a strange city'
-base = 'a beautiful redhaired mermaid'
-base = 'a gangster party'
-base = 'terror pig party'
-base = 'dirty and slimy bug monster'
-base = 'a telepathic cyborg steampunk'
-base = 'a man wearing very expensive and elegant attire'
+prompt = 'very bizarre and grotesque zombie monster'
+prompt = 'very bizarre alien with spaceship background'
+prompt = 'a funny weird frog'
+prompt = 'metal steampunk gardener'
+prompt = 'a strange city'
+prompt = 'a strange football match'
+prompt = 'a very violent boxing match'
+prompt = 'ballet dancing'
+prompt = 'a beautiful persian belly dancers'
+prompt = 'a medieval scene with people dressed in strange clothes'
+prompt = 'a bird with two hands'
+# base = 'a beautiful redhaired mermaid'
+# base = 'terror pig party'
+# base = 'dirty and slimy bug monster'
+# base = 'a telepathic cyborg steampunk'
+# base = 'a man wearing very expensive and elegant attire'
+# base = 'a very beautiful young queen in france in versaille'
+# base = 'a gangster party'
 
-tp = 150
-prompts = []
-for i in range(tp):
-    prompts.append(f'A painting of {base} who looks like {nouns[np.random.randint(len(nouns))]}. 4K Ultra HD. A lot of detail')
 
-n_steps = 30
-blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
+# tp = 150
+# prompts = []
+# for i in range(tp):
+#     prompts.append(f'A painting of {base} who looks like {nouns[np.random.randint(len(nouns))]}. 4K Ultra HD. A lot of detail')
+
+# n_steps = 30
+# blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
 # Image generation pipeline
 
@@ -194,31 +229,34 @@ renderer = lt.Renderer(width=width_renderer, height=sz[0])
     
 latents = torch.randn((1,4,64//1,64)).half().cuda()
 
-# Iterate over blended prompts
+prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
+
+speech_detector = lt.Speech2Text()
+
+
 while True:
-    print('restarting...')
-    
-    for i in range(len(blended_prompts) - 1):
-        torch.manual_seed(1)
-        
-        fract = float(i) / (len(blended_prompts) - 1)
-        blended = blender.blend_prompts(blended_prompts[i], blended_prompts[i+1], fract)
-    
-        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blended
-        
-        cam_img = cam_man.get_img()
-        cam_img = np.flip(cam_img, axis=1)
-        cam_img = Image.fromarray(np.uint8(cam_img))
-        cam_img = center_crop_and_resize(cam_img)
-        
-        ctrl_img = process_cam_image(cam_img, ctrlnet_type)
-        
-        image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
-        
-        # Render the image
-        if stitch_images:
-            image = stitch_images(cam_img, image)
-        renderer.render(image)
+    torch.manual_seed(1)
+
+    # Check for space bar press to start recording
+    if recording:
+        speech_detector.start_recording()
+        recording = False
+
+    # Check for Enter key press to stop recording
+    if stop_recording:
+        prompt = speech_detector.stop_recording()
+        print(f"New prompt: {prompt}")
+        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
+        stop_recording = False
+
+    cam_img = cam_man.get_img()
+    ctrl_img = get_control_img(cam_img, ctrlnet_type)
+
+    image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+
+    if stitch_cam:
+        image = stitch_images(cam_img, image)
+    renderer.render(image)
         
 """
 WISHLIST
