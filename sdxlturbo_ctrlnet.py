@@ -21,25 +21,30 @@ import triton
 import cv2
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, AutoencoderKL
 from prompt_blender import PromptBlender
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
-#%%
+#%% PARAMETERS
+
 # ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
 ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
+use_maxperf = True
+shape_cam=(600,800)
+size_ctrl_img = (512, 512) 
+num_inference_steps = 1
 
-
-shape_cam=(600,800) 
+# %% INITS
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
 cam_man.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
-
 
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
-use_maxperf = False
+if "depth" in ctrlnet_type:
+    depth_estimator = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to("cuda")
+    feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
 
 # initialize the models and pipeline
-
 controlnet = ControlNetModel.from_pretrained(
     ctrlnet_type,
     variant="fp16",
@@ -52,7 +57,6 @@ pipe = pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
-
 
 if use_maxperf:
     config = CompilationConfig.Default()
@@ -68,9 +72,8 @@ if use_maxperf:
     pipe = compile(pipe, config)
 
 #%%
-from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-depth_estimator = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to("cuda")
-feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
+
+
 
 def process_cam_image(ctrl_image, ctrlnet_type):
     ctrl_image = center_crop_and_resize(ctrl_image)
@@ -90,7 +93,7 @@ def process_cam_image(ctrl_image, ctrlnet_type):
     
         depth_map = torch.nn.functional.interpolate(
             depth_map.unsqueeze(1),
-            size=(512, 512),
+            size=size_ctrl_img,
             mode="bicubic",
             align_corners=False,
         )
@@ -143,7 +146,7 @@ nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
 base = 'very bizarre and grotesque zombie monster'
-base = 'very bizarre robot monster'
+base = 'a funny frog'
 
 tp = 150
 prompts = []
@@ -155,7 +158,8 @@ blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
 # Image generation pipeline
 controlnet_conditioning_scale = 0.5
-sz = (512*2, 512*2)
+
+sz = (size_ctrl_img[0]*2, size_ctrl_img[1]*2)
 renderer = lt.Renderer(width=sz[1], height=sz[0])
 latents = torch.randn((1,4,64//1,64)).half().cuda()
 
@@ -177,7 +181,7 @@ while True:
         
         ctrl_img = process_cam_image(cam_img, ctrlnet_type)
         
-        image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=4, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+        image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
         
         # Render the image
         renderer.render(image)
