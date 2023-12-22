@@ -22,7 +22,6 @@ import cv2
 from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, AutoencoderKL
 from prompt_blender import PromptBlender
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-from pynput import keyboard  # Import the pynput.keyboard module
 
 #%% PARAMETERS
 
@@ -75,21 +74,6 @@ if use_maxperf:
     pipe = compile(pipe, config)
 
 #%%
-# Flags for key presses
-recording = False
-stop_recording = False
-
-# Function to handle key press
-def on_press(key):
-    global recording, stop_recording
-    if key == keyboard.Key.space:
-        recording = True
-    elif key == keyboard.Key.enter:
-        stop_recording = True
-
-# Set up keyboard listener
-listener = keyboard.Listener(on_press=on_press)
-listener.start()
     
 def stitch_images(img1, img2):
     # Determine the size for the new image
@@ -140,6 +124,33 @@ def process_cam_image(ctrl_image, ctrlnet_type):
         
     return ctrl_image
 
+def pad_image_to_width(image, width_renderer):
+    """
+    Pads the given PIL image on the left and right with zeros to reach a specified width.
+
+    Args:
+    image (PIL.Image): The image to be padded.
+    width_renderer (int): The final width of the image after padding.
+
+    Returns:
+    PIL.Image: The padded image.
+    """
+    current_width, _ = image.size
+    total_padding = width_renderer - current_width
+    if total_padding < 0:
+        raise ValueError("width_renderer must be greater than the current image width.")
+
+    # Divide the padding equally on both sides
+    pad_width = total_padding // 2
+
+    img_array = np.array(image)
+
+    padded_array = np.pad(img_array, ((0, 0), (pad_width, pad_width), (0, 0)), mode='constant')
+
+    # Convert the padded array back to a PIL image
+    return Image.fromarray(padded_array)
+
+
 def center_crop_and_resize(img, size=(512, 512)):
     """
     Center crop an image to the specified size and resize it.
@@ -170,22 +181,10 @@ def center_crop_and_resize(img, size=(512, 512)):
         print(f"An error occurred: {e}")
 
 
-def get_control_img(cam_img, ctrlnet_type):
-    cam_img = np.flip(cam_img, axis=1)
-    cam_img = Image.fromarray(np.uint8(cam_img))
-    cam_img = center_crop_and_resize(cam_img)
-    
-    ctrl_img = process_cam_image(cam_img, ctrlnet_type)
-    return ctrl_img
-
 
 #%%
 # Example usage
 blender = PromptBlender(pipe)
-
-from nltk.corpus import wordnet as wn
-nouns = list(wn.all_synsets('n'))
-nouns = [nouns[i].lemma_names()[0] for i in range(len(nouns))]
 
 # base = 'skeleton person head skull terrifying'
 prompt = 'very bizarre and grotesque zombie monster'
@@ -208,23 +207,9 @@ prompt = 'a bird with two hands'
 # base = 'a gangster party'
 
 
-# tp = 150
-# prompts = []
-# for i in range(tp):
-#     prompts.append(f'A painting of {base} who looks like {nouns[np.random.randint(len(nouns))]}. 4K Ultra HD. A lot of detail')
-
-# n_steps = 30
-# blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
-
-# Image generation pipeline
-
-
 sz = (size_ctrl_img[0]*2, size_ctrl_img[1]*2)
-if stitch_cam:
-    width_renderer = width=2*sz[1]
-else:
-    width_renderer = width=1*sz[1]
-    
+width_renderer = width=2*sz[1]
+
 renderer = lt.Renderer(width=width_renderer, height=sz[0])
     
 latents = torch.randn((1,4,64//1,64)).half().cuda()
@@ -233,29 +218,46 @@ prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_pro
 
 speech_detector = lt.Speech2Text()
 
+akai_lpd8 = lt.MidiInput("akai_lpd8")
 
 while True:
     torch.manual_seed(1)
+    
+    num_inference_steps = int(akai_lpd8.get("E1", val_min=1, val_max=5, val_default=1))
+    
+    controlnet_conditioning_scale = akai_lpd8.get("E0")
 
-    # Check for space bar press to start recording
-    if recording:
-        speech_detector.start_recording()
-        recording = False
-
-    # Check for Enter key press to stop recording
-    if stop_recording:
-        prompt = speech_detector.stop_recording()
-        print(f"New prompt: {prompt}")
-        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
-        stop_recording = False
+    if akai_lpd8.get("A0", button_mode="is_held"):
+        if not speech_detector.audio_recorder.is_recording:
+            speech_detector.start_recording()
+    elif not akai_lpd8.get("A0", button_mode="is_held"):
+        if speech_detector.audio_recorder.is_recording:
+            prompt = speech_detector.stop_recording()
+            print(f"New prompt: {prompt}")
+            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
+            stop_recording = False
 
     cam_img = cam_man.get_img()
-    ctrl_img = get_control_img(cam_img, ctrlnet_type)
+    cam_img = np.flip(cam_img, axis=1)
+    cam_img = Image.fromarray(np.uint8(cam_img))
+    cam_img = center_crop_and_resize(cam_img)
+    
+    ctrl_img = process_cam_image(cam_img, ctrlnet_type)
 
     image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
-
+    
+    stitch_cam = akai_lpd8.get("D0", button_mode="toggle")
+    show_ctrlnet_img = akai_lpd8.get("D1", button_mode="toggle")
+    
     if stitch_cam:
-        image = stitch_images(cam_img, image)
+        if show_ctrlnet_img:
+            image = stitch_images(ctrl_img, image)
+        else:
+            image = stitch_images(cam_img, image)
+            
+    else:
+        image = pad_image_to_width(image, image.size[0]*2)
+        
     renderer.render(image)
         
 """
