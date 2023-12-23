@@ -74,13 +74,11 @@ if use_maxperf:
     pipe = compile(pipe, config)
 
 #%%
-def get_ctrl_img(cam_img, ctrlnet_type):
+def get_ctrl_img(cam_img, ctrlnet_type, low_threshold=100, high_threshold=200):
     
     
     if ctrlnet_type == "diffusers/controlnet-canny-sdxl-1.0":
         cam_img = np.array(cam_img)
-        low_threshold = 100
-        high_threshold = 200
         ctrl_image = cv2.Canny(cam_img, low_threshold, high_threshold)
         ctrl_image = ctrl_image[:, :, None]
         ctrl_image = np.concatenate([ctrl_image, ctrl_image, ctrl_image], axis=2)
@@ -162,11 +160,9 @@ image_diffusion = Image.fromarray(np.zeros((size_diff_img[1], size_diff_img[0], 
 img_buffer = []
 while True:
     torch.manual_seed(1)
-    
     num_inference_steps = int(akai_lpd8.get("H1", val_min=1, val_max=5, val_default=1))
-    
     controlnet_conditioning_scale = akai_lpd8.get("E0")
-
+    
     do_record = akai_lpd8.get("A0", button_mode="is_pressed")
     if do_record:
         if not speech_detector.audio_recorder.is_recording:
@@ -190,11 +186,13 @@ while True:
         cam_img_np = np.array(cam_img)
         cam_img_np[depth_map < threshold_depth] = 0
         cam_img = Image.fromarray(cam_img_np)
-    # ctrl_img_diffusion = get_ctrl_img(image_diffusion, ctrlnet_type)
-    # fract_mixing = akai_lpd8.get("E1", val_default=0)
+
     
-    ctrl_img_cam = get_ctrl_img(cam_img, ctrlnet_type)
-    ctrl_img = ctrl_img_cam #blend_images(ctrl_img_cam, ctrl_img_diffusion, fract_mixing)
+    low_threshold = akai_lpd8.get("G0", val_default=100, val_min=0, val_max=255)
+    high_threshold = akai_lpd8.get("G1", val_default=200, val_min=0, val_max=255)
+
+    ctrl_img_cam = get_ctrl_img(cam_img, ctrlnet_type, low_threshold=low_threshold, high_threshold=high_threshold)
+    ctrl_img = ctrl_img_cam
 
     image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     
