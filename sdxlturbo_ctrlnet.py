@@ -92,7 +92,7 @@ def stitch_images(img1, img2):
     return new_img
 
 
-def process_cam_image(ctrl_image, ctrlnet_type):
+def get_ctrl_img(ctrl_image, ctrlnet_type):
     ctrl_image = np.array(ctrl_image)
     
     if ctrlnet_type == "diffusers/controlnet-canny-sdxl-1.0":
@@ -181,6 +181,44 @@ def center_crop_and_resize(img, size=(512, 512)):
         print(f"An error occurred: {e}")
 
 
+def process_cam_img(cam_img):
+    cam_img = np.flip(cam_img, axis=1)
+    cam_img = Image.fromarray(np.uint8(cam_img))
+    cam_img = center_crop_and_resize(cam_img)
+    return cam_img
+    
+
+def blend_images(img1, img2, weight):
+    # Convert images to numpy arrays
+    arr1 = np.array(img1, dtype=np.float64)
+    arr2 = np.array(img2, dtype=np.float64)
+
+    # Blend images
+    blended_arr = np.clip(arr1 + weight * arr2, 0, 255)
+
+    # Convert back to image
+    return Image.fromarray(blended_arr.astype(np.uint8))
+
+
+def weighted_average_images(img_buffer, weight_begin, weight_end):
+    num_images = len(img_buffer)
+    
+    # Generate linear weights
+    weights = np.linspace(weight_begin, weight_end, num_images)
+
+    # Convert all PIL images to numpy arrays and apply weights
+    weighted_arrays = [np.array(img) * weight for img, weight in zip(img_buffer, weights)]
+
+    # Sum and normalize the weighted arrays
+    sum_weighted_arrays = np.sum(weighted_arrays, axis=0)
+    avg_array = (sum_weighted_arrays / np.sum(weights)).astype(np.uint8)
+
+    # Convert the average array back to a PIL image
+    avg_image = Image.fromarray(avg_array)
+
+    return avg_image
+
+
 
 #%%
 # Example usage
@@ -197,7 +235,7 @@ prompt = 'a very violent boxing match'
 prompt = 'ballet dancing'
 prompt = 'a beautiful persian belly dancers'
 prompt = 'a medieval scene with people dressed in strange clothes'
-prompt = 'a bird with two hands'
+# prompt = 'a bird with two hands'
 # base = 'a beautiful redhaired mermaid'
 # base = 'terror pig party'
 # base = 'dirty and slimy bug monster'
@@ -220,50 +258,58 @@ speech_detector = lt.Speech2Text()
 
 akai_lpd8 = lt.MidiInput("akai_lpd8")
 
+image_diffusion = Image.fromarray(np.zeros((size_ctrl_img[1], size_ctrl_img[0], 3), dtype=np.uint8))
+img_buffer = []
 while True:
     torch.manual_seed(1)
     
-    num_inference_steps = int(akai_lpd8.get("E1", val_min=1, val_max=5, val_default=1))
+    num_inference_steps = int(akai_lpd8.get("H1", val_min=1, val_max=5, val_default=1))
     
     controlnet_conditioning_scale = akai_lpd8.get("E0")
 
-    if akai_lpd8.get("A0", button_mode="is_held"):
+    if akai_lpd8.get("A0", button_mode="is_pressed"):
         if not speech_detector.audio_recorder.is_recording:
             speech_detector.start_recording()
-    elif not akai_lpd8.get("A0", button_mode="is_held"):
+    elif not akai_lpd8.get("A0", button_mode="is_pressed"):
         if speech_detector.audio_recorder.is_recording:
-            prompt = speech_detector.stop_recording()
+            try:
+                prompt = speech_detector.stop_recording()
+            except Exception as e:
+                print(f"FAIL {e}")
             print(f"New prompt: {prompt}")
             prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
             stop_recording = False
 
-    cam_img = cam_man.get_img()
-    cam_img = np.flip(cam_img, axis=1)
-    cam_img = Image.fromarray(np.uint8(cam_img))
-    cam_img = center_crop_and_resize(cam_img)
+    cam_img = process_cam_img(cam_man.get_img())
+    ctrl_img_cam = get_ctrl_img(cam_img, ctrlnet_type)
     
-    ctrl_img = process_cam_image(cam_img, ctrlnet_type)
+    if akai_lpd8.get("C0", button_mode="toggle"):
+        nmb_img_buffers = int(akai_lpd8.get("F0", val_min=1, val_max=10, val_default=3))
+        img_buffer.append(ctrl_img_cam)
+        if len(img_buffer) > nmb_img_buffers:
+            img_buffer.pop(0)
+        
+        cam_img = Image.fromarray(np.mean([np.array(img) for img in img_buffer], axis=0).astype(np.uint8))
+        ctrl_img_cam = weighted_average_images(img_buffer, 0.3, 1.0)
+    
+    ctrl_img_diffusion = get_ctrl_img(image_diffusion, ctrlnet_type)
+    
+    fract_mixing = akai_lpd8.get("E1", val_default=0)
+    
+    ctrl_img = blend_images(ctrl_img_cam, ctrl_img_diffusion, fract_mixing)
 
-    image = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     
     stitch_cam = akai_lpd8.get("D0", button_mode="toggle")
     show_ctrlnet_img = akai_lpd8.get("D1", button_mode="toggle")
     
     if stitch_cam:
         if show_ctrlnet_img:
-            image = stitch_images(ctrl_img, image)
+            image_show = stitch_images(ctrl_img, image_diffusion)
         else:
-            image = stitch_images(cam_img, image)
+            image_show = stitch_images(cam_img, image_diffusion)
             
     else:
-        image = pad_image_to_width(image, image.size[0]*2)
+        image_show = pad_image_to_width(image_diffusion, image_diffusion.size[0]*2)
         
-    renderer.render(image)
-        
-"""
-WISHLIST
-- threaded controlnet computation
-- other controlnets
-- mess with more prompts
-
-"""
+    renderer.render(image_show)
