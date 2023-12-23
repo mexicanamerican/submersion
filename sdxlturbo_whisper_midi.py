@@ -28,12 +28,10 @@ from img_utils import pad_image_to_width, pad_image_to_width, blend_images, proc
 
 ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
 # ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
+use_ctrlnet = True
 use_maxperf = False
 shape_cam=(600,800)
 size_diff_img = (512, 512) 
-num_inference_steps = 2
-controlnet_conditioning_scale = 0.45
-stitch_cam = False
 
 # %% INITS
 cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
@@ -47,14 +45,17 @@ depth_estimator = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas"
 feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
 
 # initialize the models and pipeline
-controlnet = ControlNetModel.from_pretrained(
-    ctrlnet_type,
-    variant="fp16",
-    use_safetensors=True,
-    torch_dtype=torch.float16,
-).to("cuda")
-
-pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", controlnet=controlnet, torch_dtype=torch.float16, variant="fp16")
+if use_ctrlnet:
+    controlnet = ControlNetModel.from_pretrained(
+        ctrlnet_type,
+        variant="fp16",
+        use_safetensors=True,
+        torch_dtype=torch.float16,
+    ).to("cuda")
+    pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", controlnet=controlnet, torch_dtype=torch.float16, variant="fp16")
+else:
+    pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
+    
 pipe = pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
@@ -145,19 +146,15 @@ prompt = 'a medieval scene with people dressed in strange clothes'
 
 sz = (size_diff_img[0]*2, size_diff_img[1]*2)
 width_renderer = width=2*sz[1]
-
-renderer = lt.Renderer(width=width_renderer, height=sz[0])
     
+image_diffusion = Image.fromarray(np.zeros((size_diff_img[1], size_diff_img[0], 3), dtype=np.uint8))
 latents = torch.randn((1,4,64//1,64)).half().cuda()
-
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
 
+renderer = lt.Renderer(width=width_renderer, height=sz[0])
 speech_detector = lt.Speech2Text()
-
 akai_lpd8 = lt.MidiInput("akai_lpd8")
 
-image_diffusion = Image.fromarray(np.zeros((size_diff_img[1], size_diff_img[0], 3), dtype=np.uint8))
-img_buffer = []
 while True:
     torch.manual_seed(1)
     num_inference_steps = int(akai_lpd8.get("H1", val_min=1, val_max=5, val_default=1))
@@ -191,16 +188,18 @@ while True:
     low_threshold = akai_lpd8.get("G0", val_default=100, val_min=0, val_max=255)
     high_threshold = akai_lpd8.get("G1", val_default=200, val_min=0, val_max=255)
 
-    ctrl_img_cam = get_ctrl_img(cam_img, ctrlnet_type, low_threshold=low_threshold, high_threshold=high_threshold)
-    ctrl_img = ctrl_img_cam
-
-    image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    if use_ctrlnet:
+        ctrl_img = get_ctrl_img(cam_img, ctrlnet_type, low_threshold=low_threshold, high_threshold=high_threshold)
+        image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    else:
+        image_diffusion = pipe(image=cam_img, latents=latents, num_inference_steps=2, strength=0.9999, guidance_scale=0.5, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+        
     
     stitch_cam = akai_lpd8.get("D0", button_mode="toggle")
     show_ctrlnet_img = akai_lpd8.get("D1", button_mode="toggle")
     
     if stitch_cam:
-        if show_ctrlnet_img:
+        if show_ctrlnet_img and use_ctrlnet:
             image_show = stitch_images(ctrl_img, image_diffusion)
         else:
             image_show = stitch_images(cam_img, image_diffusion)
