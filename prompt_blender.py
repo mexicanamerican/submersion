@@ -44,7 +44,7 @@ class PromptBlender:
 
         return interp
 
-    def get_prompt_embeds(self, prompt):
+    def get_prompt_embeds(self, prompt, negative_prompt=""):
         """
         Encodes a text prompt into embeddings using the model pipeline.
         """
@@ -59,8 +59,8 @@ class PromptBlender:
             device="cuda",
             num_images_per_prompt=1,
             do_classifier_free_guidance=True,
-            negative_prompt="",
-            negative_prompt_2="",
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt,
             prompt_embeds=None,
             negative_prompt_embeds=None,
             pooled_prompt_embeds=None,
@@ -148,7 +148,7 @@ class PromptBlenderAsync:
 
         return interp
 
-    def get_prompt_embeds(self, prompt):
+    def get_prompt_embeds(self, prompt, negative_prompt=""):
         """
         Encodes a text prompt into embeddings using the model pipeline.
         """
@@ -163,8 +163,8 @@ class PromptBlenderAsync:
             device="cuda",
             num_images_per_prompt=1,
             do_classifier_free_guidance=True,
-            negative_prompt="",
-            negative_prompt_2="",
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt,
             prompt_embeds=None,
             negative_prompt_embeds=None,
             pooled_prompt_embeds=None,
