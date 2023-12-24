@@ -5,7 +5,9 @@ __pycache__/
 logs/*
 # C extensions
 *.so
-
+*.png
+*.jpg
+xj*.py
 # Distribution / packaging
 .Python
 build/
