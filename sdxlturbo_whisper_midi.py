@@ -26,16 +26,16 @@ from img_utils import pad_image_to_width, pad_image_to_width, blend_images, proc
 
 #%% PARAMETERS
 
-ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0"
-# ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0"
+ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0-mid"
+# ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0-mid"
 use_ctrlnet = True
 use_maxperf = False
 shape_cam=(600,800)
 size_diff_img = (512, 512) 
 
 # %% INITS
-cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
-cam_man.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+cam = lt.WebCam(cam_id=0, shape_hw=shape_cam)
+cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -57,8 +57,10 @@ else:
     pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
     
 pipe = pipe.to("cuda")
+
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
+
 pipe.set_progress_bar_config(disable=True)
 
 if use_maxperf:
@@ -78,7 +80,7 @@ if use_maxperf:
 def get_ctrl_img(cam_img, ctrlnet_type, low_threshold=100, high_threshold=200):
     
     
-    if ctrlnet_type == "diffusers/controlnet-canny-sdxl-1.0":
+    if "canny" in ctrlnet_type:
         cam_img = np.array(cam_img)
         ctrl_image = cv2.Canny(cam_img, low_threshold, high_threshold)
         ctrl_image = ctrl_image[:, :, None]
@@ -125,31 +127,31 @@ blender = PromptBlender(pipe)
 
 # base = 'skeleton person head skull terrifying'
 prompt = 'very bizarre and grotesque zombie monster'
-prompt = 'very bizarre alien with spaceship background'
-prompt = 'a funny weird frog'
-prompt = 'metal steampunk gardener'
-prompt = 'a strange city'
-prompt = 'a strange football match'
-prompt = 'a very violent boxing match'
-prompt = 'ballet dancing'
-prompt = 'a beautiful persian belly dancers'
-prompt = 'a medieval scene with people dressed in strange clothes'
+# prompt = 'very bizarre alien with spaceship background'
+# prompt = 'a funny weird frog'
+# prompt = 'metal steampunk gardener'
+# prompt = 'a strange city'
+# prompt = 'a strange football match'
+# prompt = 'a very violent boxing match'
+# prompt = 'ballet dancing'
+# prompt = 'a beautiful persian belly dancers'
+# prompt = 'a medieval scene with people dressed in strange clothes'
 # prompt = 'a bird with two hands'
 # base = 'a beautiful redhaired mermaid'
 # base = 'terror pig party'
 # base = 'dirty and slimy bug monster'
-# base = 'a telepathic cyborg steampunk'
+base = 'a telepathic cyborg steampunk'
 # base = 'a man wearing very expensive and elegant attire'
 # base = 'a very beautiful young queen in france in versaille'
 # base = 'a gangster party'
 
-
-sz = (size_diff_img[0]*2, size_diff_img[1]*2)
+negative_prompt = 'blurry, tiled, wrong, bad art, pixels, amateur drawing, haze'
+sz = (size_diff_img[0]*1, size_diff_img[1]*1)
 width_renderer = width=2*sz[1]
     
 image_diffusion = Image.fromarray(np.zeros((size_diff_img[1], size_diff_img[0], 3), dtype=np.uint8))
 latents = torch.randn((1,4,64//1,64)).half().cuda()
-prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
+prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
 
 renderer = lt.Renderer(width=width_renderer, height=sz[0])
 speech_detector = lt.Speech2Text()
@@ -157,8 +159,8 @@ akai_lpd8 = lt.MidiInput("akai_lpd8")
 
 while True:
     torch.manual_seed(1)
-    num_inference_steps = int(akai_lpd8.get("H1", val_min=1, val_max=5, val_default=1))
-    controlnet_conditioning_scale = akai_lpd8.get("E0")
+    num_inference_steps = int(akai_lpd8.get("H1", val_min=2, val_max=5, val_default=1))
+    controlnet_conditioning_scale = akai_lpd8.get("E0", val_min=0, val_max=1, val_default=0.5)
     
     do_record = akai_lpd8.get("A0", button_mode="is_pressed")
     if do_record:
@@ -171,10 +173,10 @@ while True:
             except Exception as e:
                 print(f"FAIL {e}")
             print(f"New prompt: {prompt}")
-            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt)
+            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
             stop_recording = False
 
-    cam_img = process_cam_img(cam_man.get_img())
+    cam_img = process_cam_img(cam.get_img())
     
     do_depth_filter = akai_lpd8.get("C0", button_mode="toggle")
     if do_depth_filter:
@@ -185,15 +187,19 @@ while True:
         cam_img = Image.fromarray(cam_img_np)
 
     
-    low_threshold = akai_lpd8.get("G0", val_default=100, val_min=0, val_max=255)
-    high_threshold = akai_lpd8.get("G1", val_default=200, val_min=0, val_max=255)
-
+    low_threshold = akai_lpd8.get("G0", val_default=34, val_min=0, val_max=255)
+    high_threshold = akai_lpd8.get("G1", val_default=92, val_min=0, val_max=255)
+    guidance_scale = 0.0
+    
+    t0 = time.time()
     if use_ctrlnet:
         ctrl_img = get_ctrl_img(cam_img, ctrlnet_type, low_threshold=low_threshold, high_threshold=high_threshold)
-        image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=0.0, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+        image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     else:
-        image_diffusion = pipe(image=cam_img, latents=latents, num_inference_steps=2, strength=0.9999, guidance_scale=0.5, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
-        
+        image_diffusion = pipe(image=cam_img, latents=latents, num_inference_steps=num_inference_steps, strength=0.9999, guidance_scale=guidance_scale, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    dt = time.time() - t0
+    fps = 1/dt
+    print(f"\rCurrent fps: {fps:.1f}", end="")
     
     stitch_cam = akai_lpd8.get("D0", button_mode="toggle")
     show_ctrlnet_img = akai_lpd8.get("D1", button_mode="toggle")
@@ -208,3 +214,9 @@ while True:
         image_show = pad_image_to_width(image_diffusion, image_diffusion.size[0]*2)
         
     renderer.render(image_show)
+
+"""
+- midi cycle new noise
+- append prompt
+
+"""
