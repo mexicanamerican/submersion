@@ -29,7 +29,7 @@ from img_utils import pad_image_to_width, pad_image_to_width, blend_images, proc
 ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0-mid"
 # ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0-mid"
 use_ctrlnet = True
-use_maxperf = False
+compile_pipe = True
 shape_cam=(600,800)
 size_diff_img = (512, 512) 
 
@@ -58,12 +58,12 @@ else:
     
 pipe = pipe.to("cuda")
 
-pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
-pipe.vae = pipe.vae.cuda()
+# pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
+# pipe.vae = pipe.vae.cuda()
 
 pipe.set_progress_bar_config(disable=True)
 
-if use_maxperf:
+if compile_pipe:
     config = CompilationConfig.Default()
     config.enable_xformers = True
     config.enable_triton = True
@@ -159,7 +159,7 @@ akai_lpd8 = lt.MidiInput("akai_lpd8")
 
 while True:
     torch.manual_seed(1)
-    num_inference_steps = int(akai_lpd8.get("H1", val_min=2, val_max=5, val_default=1))
+    num_inference_steps = int(akai_lpd8.get("H1", val_min=2, val_max=5, val_default=2))
     controlnet_conditioning_scale = akai_lpd8.get("E0", val_min=0, val_max=1, val_default=0.5)
     
     do_record = akai_lpd8.get("A0", button_mode="is_pressed")
