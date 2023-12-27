@@ -2,46 +2,39 @@
 # -*- coding: utf-8 -*-
 
 #%%
-from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image, StableDiffusionXLControlNetPipeline
 import torch
 import time
 from diffusers import AutoencoderTiny
-from sfast.compilers.diffusion_pipeline_compiler import (compile, CompilationConfig)
-from diffusers.utils import load_image
 import xformers
 import triton
 import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
-import random as rn
 import numpy as np
-import xformers
-import triton
 import cv2
-from diffusers import StableDiffusionXLControlNetPipeline, ControlNetModel, AutoencoderKL
+from diffusers import ControlNetModel
 from prompt_blender import PromptBlender
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 from img_utils import pad_image_to_width, pad_image_to_width, blend_images, process_cam_img, stitch_images, weighted_average_images
-import torch
-import torch.nn.functional as F
 from datetime import datetime
+torch.set_grad_enabled(False)
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
 #%% PARAMETERS
 
 ctrlnet_type = "diffusers/controlnet-canny-sdxl-1.0-mid"
 # ctrlnet_type = "diffusers/controlnet-depth-sdxl-1.0-mid"
 use_ctrlnet = True
-compile_pipe = True
+compile_with_sfast = False
 shape_cam=(600,800)
 size_diff_img = (512, 512) 
 
 # %% INITS
 cam = lt.WebCam(cam_id=0, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
-
-torch.set_grad_enabled(False)
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
 
 depth_estimator = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to("cuda")
 feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
@@ -54,36 +47,26 @@ if use_ctrlnet:
         use_safetensors=True,
         torch_dtype=torch.float16,
     ).to("cuda")
-    pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", controlnet=controlnet, torch_dtype=torch.float16, variant="fp16")
+    pipe = StableDiffusionXLControlNetPipeline.from_pretrained("stabilityai/sdxl-turbo", controlnet=controlnet, torch_dtype=torch.float16, variant="fp16")
 else:
     pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
     
 pipe = pipe.to("cuda")
-# pipe.enable_xformers_memory_efficient_attention()
 
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
-
-
 pipe.set_progress_bar_config(disable=True)
 
-
-
-if compile_pipe:
+if compile_with_sfast:
+    from sfast.compilers.diffusion_pipeline_compiler import (compile, CompilationConfig)
+    pipe.enable_xformers_memory_efficient_attention()
     config = CompilationConfig.Default()
     config.enable_xformers = True
     config.enable_triton = True
     config.enable_cuda_graph = True
-    config.enable_jit = True
-    config.enable_jit_freeze = True
-    config.trace_scheduler = True
-    config.enable_cnn_optimization = True
-    config.preserve_parameters = False
-    config.prefer_lowp_gemm = True
     pipe = compile(pipe, config)
 
 #%%
-
 def filter_edges(ctrl_img, min_size=10):
     arr = np.asarray(ctrl_img)[:,:,0]
     # connectivity=9
@@ -192,14 +175,14 @@ renderer = lt.Renderer(width=width_renderer, height=sz[0])
 speech_detector = lt.Speech2Text()
 akai_lpd8 = lt.MidiInput("akai_lpd8")
 
-t0 = time.time()
 fps = 5
-dt = -1
 
 currently_recording_vid = False
 
+
+
 while True:
-    generator.manual_seed(420)
+    torch.manual_seed(420)
     num_inference_steps = int(akai_lpd8.get("H1", val_min=2, val_max=5, val_default=2))
     controlnet_conditioning_scale = akai_lpd8.get("E0", val_min=0, val_max=1, val_default=0.5)
     
@@ -229,13 +212,7 @@ while True:
         movie.finalize()
         currently_recording_vid = False
     
-    
-    
-    
-    
-    # do_progress = akai_lpd8.get("A0", button_mode="is_pressed")
-    # if do_progress:
-    fract_mixing = akai_lpd8.get("H0", val_default=0.0) #np.clip((time.time() - t0)/speed, 0, speed)
+    fract_mixing = 0
     latents = blender.interpolate_spherical(latents1, latents2, fract_mixing)        
 
     cam_img = process_cam_img(cam.get_img())
@@ -259,12 +236,11 @@ while True:
     high_threshold = akai_lpd8.get("F1", val_default=70, val_min=0, val_max=255)
     
     guidance_scale = 0.0
-
     t0 = time.time()
     if use_ctrlnet:
         ctrl_img_prev =  ctrl_img.copy()   
         ctrl_img = get_ctrl_img(cam_img, ctrlnet_type, low_threshold=low_threshold, high_threshold=high_threshold)
-        image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, generator=generator).images[0]
+        image_diffusion = pipe(image=ctrl_img, latents=latents, controlnet_conditioning_scale=controlnet_conditioning_scale, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     else:
         image_diffusion = pipe(image=cam_img, latents=latents, num_inference_steps=num_inference_steps, strength=0.9999, guidance_scale=guidance_scale, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, generator=generator).images[0]
     dt = time.time() - t0
