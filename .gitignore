@@ -6,6 +6,7 @@ logs/*
 # C extensions
 *.so
 *.png
+*.mp4
 *.jpg
 xj*.py
 # Distribution / packaging
