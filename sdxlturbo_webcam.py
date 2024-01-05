@@ -30,7 +30,7 @@ import cv2
 from prompt_blender import PromptBlender
 
 shape_cam=(600,800) 
-cam_man = lt.WebCam(cam_id=0, shape_hw=shape_cam)
+cam_man = lt.WebCam(cam_id=7, shape_hw=shape_cam)
 cam_man.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 
 
@@ -80,7 +80,7 @@ n_steps = 30
 blended_prompts = blender.blend_sequence_prompts(prompts, n_steps)
 
 # Image generation pipeline
-sz = (512*2, 512*4)
+sz = (512*1, 512*2)
 renderer = lt.Renderer(width=sz[1], height=sz[0])
 latents = torch.randn((1,4,64//1,64)).half().cuda()
 

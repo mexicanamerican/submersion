@@ -1,0 +1,38 @@
+
+
+# TODO DIFFUSION LLM 
+
+2. time mixtral inference - check if its running on GPU - necessary?
+4. DIFFUSION: travel directly in the embedding space - finding the meaningful hyperspace
+    4.1 free flight mode
+    4.2 exploration mode
+    4.3 perturbation of the latent space
+    4.4 perturbation of the noise
+5. real time audio diffusion / CHECK OPTIONS 
+6. camera input conditioning on pose - ctrlnet - check code from fork
+7. speech control
+8. OSC controlled sound real time image diffusion
+9. insert GPT generated subtitles in real time // subtitle class addded - subtitle code done
+
+/-----/
+
+TOOLS FOR MOVIE CREATION
+
+- Movie Scene generation
+    - generate multiple scenes and switch rapidly
+    - have N threads running at the same time
+    - add subtitles to the renderer - scene dependent
+    - integrate some of the interactivity tools from webcam/voice
+
+
+#%%%
+
+DGX IP
+
+ssh lugo@10.40.49.29
+
+#%%
+
+OPENAI KEY
+
+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

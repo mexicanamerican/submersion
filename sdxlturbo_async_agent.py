@@ -20,6 +20,7 @@ import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
+from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
 import random as rn
 import numpy as np
 import asyncio
@@ -33,11 +34,30 @@ torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
+use_maxperf = True # 3 MIN COMPILE TIME  
+
 pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
-pipe = pipe.to("cuda")
+pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
+
 pipe.set_progress_bar_config(disable=True)
+
+if use_maxperf:
+    
+    config = CompilationConfig.Default()
+       
+    config.enable_xformers = True    
+    config.enable_triton = True
+    config.enable_cuda_graph = True
+    config.enable_jit = True
+    config.enable_jit_freeze = True
+    config.trace_scheduler = True
+    config.enable_cnn_optimization = True
+    config.preserve_parameters = False
+    config.prefer_lowp_gemm = True
+
+    pipe = compile(pipe, config)
 
 
 #%%
@@ -60,6 +80,7 @@ async def processed_prompt_input_loop(gpt, blender, update_event):
     while True:
         
         new_prompt = await asyncio.to_thread(input, "Enter new prompt: ")
+
         processed_prompt = prompt_processing(gpt, new_prompt)  # Process the new prompt
         blender.add_prompt(processed_prompt)  # Add the processed prompt
         update_event.set()  # Signal that a new prompt has been added
@@ -72,14 +93,13 @@ async def prompt_input_loop(blender, update_event):
         
         
 async def render_loop(blender, pipe, update_event):
-    sz = (512, 512)
+    sz = (1024, 512)
     renderer = lt.Renderer(width=sz[1], height=sz[0])
-    latents = torch.randn((1, 4, 64, 64)).half().cuda()
+    latents = torch.randn((1, 4, sz[1]//8, sz[0]//8)).half().cuda()
 
     current_index = 0  # Track the current position in the prompt sequence
 
-    while True:processed_prompt_input_loop(blender, update_event))
-    render_task = asyncio.create_task
+    while True:
         # Check if there's a new prompt to blend
         if update_event.is_set():
             update_event.clear()  # Reset the event
@@ -103,7 +123,7 @@ async def render_loop(blender, pipe, update_event):
 
 async def main():
     initial_prompts = ["a pink and blue ocean seen from above", "a pink and blue ocean seen from above"]
-    n_steps = 50
+    n_steps = 10
     blender = PromptBlenderAsync(pipe, initial_prompts, n_steps)
     update_event = asyncio.Event()
     

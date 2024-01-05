@@ -100,7 +100,7 @@ class GPTAgent:
 model_name = "gpt-4-1106-preview"
 agent_name = "Ocean Painter"
 instructions = "change the sentence 'an ocean seen from above' so as to portray the emotion of the prompt. for example, if you receive the message 'I am angry' you should output 'a red ocean seen from above'. only give the output description of the ocean- prompt: "
-
+#%%
 # use the assistant ID if you already created it previously
 assistant_id = 'asst_KrxchcAzg9rO4T0If7wwg2sx'
 gpt = GPTAgent(model=model_name, name = agent_name, instructions=instructions, assistant_id = assistant_id)

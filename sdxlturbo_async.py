@@ -20,6 +20,7 @@ import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
+from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
 import random as rn
 import numpy as np
 import asyncio
@@ -31,15 +32,43 @@ torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
+use_maxperf = True # 3 MIN COMPILE TIME  
+
 pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
-pipe = pipe.to("cuda")
+pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
 pipe.vae = pipe.vae.cuda()
+
 pipe.set_progress_bar_config(disable=True)
 
-#%%
 
 
+if use_maxperf:
+    
+    config = CompilationConfig.Default()
+       
+    config.enable_xformers = True    
+    config.enable_triton = True
+    config.enable_cuda_graph = True
+    config.enable_jit = True
+    config.enable_jit_freeze = True
+    config.trace_scheduler = True
+    config.enable_cnn_optimization = True
+    config.preserve_parameters = False
+    config.prefer_lowp_gemm = True
+    pipe = compile(pipe, config)
+
+    latents = torch.randn((1, 4, 96, 96)).half().cuda() # 64, 96
+    current_index = 0
+    initial_prompts = ["a pink and blue ocean seen from above", "a pink and blue ocean seen from above"]
+    n_steps = 150
+    fract = 0.5
+    blender = PromptBlenderAsync(pipe, initial_prompts, n_steps)
+    blended = blender.blend_prompts(blender.blended_prompts[current_index], blender.blended_prompts[current_index + 1], fract)
+    prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blended
+    image = pipe(guidance_scale=0.0, num_inference_steps=1, latents=latents, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    
+    print('Compiled Successfully')
 
 #%%
 
@@ -71,10 +100,9 @@ async def prompt_input_loop(blender, update_event):
         
         
 async def render_loop(blender, pipe, update_event):
-    sz = (512, 512)
+    sz = (512*2, 512*2)
     renderer = lt.Renderer(width=sz[1], height=sz[0])
-    latents = torch.randn((1, 4, 64, 64)).half().cuda()
-
+    latents = torch.randn((1, 4, 96, 96)).half().cuda() # 64, 96
     current_index = 0  # Track the current position in the prompt sequence
 
     while True:
@@ -91,7 +119,7 @@ async def render_loop(blender, pipe, update_event):
 
             prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blended
             image = pipe(guidance_scale=0.0, num_inference_steps=1, latents=latents, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
-            renderer.render(image.rotate(90))
+            renderer.render(image)
 
             # Update the current index to move to the next prompt
             current_index += 1
@@ -105,17 +133,28 @@ async def main():
     blender = PromptBlenderAsync(pipe, initial_prompts, n_steps)
     update_event = asyncio.Event()
     
-
     # Start the asynchronous loops
-    input_task = asyncio.create_task(processed_prompt_input_loop(blender, update_event))
+    input_task = asyncio.create_task(prompt_input_loop(blender, update_event))
     render_task = asyncio.create_task(render_loop(blender, pipe, update_event))
 
     # Run both tasks concurrently
     await asyncio.gather(input_task, render_task)
 
+
+while True:
+    
+    initial_prompts = ["a pink and blue ocean seen from above", "a pink and blue ocean seen from above"]
+    n_steps = 100
+    blender = PromptBlenderAsync(pipe, initial_prompts, n_steps)
+    
+    # Start the asynchronous loops
+    input_task = asyncio.create_task(prompt_input_loop(blender, update_event))
+    render_task = asyncio.create_task(render_loop(blender, pipe, update_event))
+
+
 # Get the current event loop and run the main function
-loop = asyncio.get_event_loop()
-loop.run_until_complete(main())
+#loop = asyncio.get_event_loop()
+#loop.run_until_complete(main())
 
 
 
