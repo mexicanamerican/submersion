@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 13 22:13:24 2023
-
-@author: lunar
+- prompt blending & kill this local prompt blender (living in psychoactive surface)
+- experiment with different noises etc
+- deflickering the cam image
+- select good prompts / understand what makes a good prompt
 """
 
 #%%
@@ -26,7 +27,8 @@ import numpy as np
 import xformers
 import triton
 import cv2
-
+import sys
+sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 
 shape_cam=(600,800) 
@@ -78,8 +80,9 @@ negative_prompt = "text, frame, photorealistic, photo"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
 
 list_prompts_all = []
-with open("../coupling_diffusion/good_prompts.txt", "r") as file: 
+with open("../psychoactive_surface/good_prompts.txt", "r", encoding="utf-8") as file: 
     list_prompts_all = file.read().split('\n')
+
 
 #%%  
 n_steps = 30
@@ -185,16 +188,18 @@ while True:
         mask_schleifing = (image_displacement_array.max(dim=2)[0] < coef_schleifing)
         
         do_decay_schleifing = akai_midimix.get("B4", button_mode="toggle")
-        if do_decay_schleifing:
-            cam_img_torch[mask_schleifing] = last_cam_img_torch[mask_schleifing]*0.8 + cam_img_torch[mask_schleifing]*0.2
-        else:
-            cam_img_torch[mask_schleifing] = last_cam_img_torch[mask_schleifing]
+        # if do_decay_schleifing:
+        #     cam_img_torch[mask_schleifing] = last_cam_img_torch[mask_schleifing]*0.8 + cam_img_torch[mask_schleifing]*0.2
+        # else:
+        #     cam_img_torch[mask_schleifing] = last_cam_img_torch[mask_schleifing]
+            
+        cam_img_torch += torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) * coef_schleifing * 255 * 5
             
         #cam_img_torch = mask_schleifing.unsqueeze(2).repeat([1,1,3]).float() * 255
         
         acid_strength *= acid_gain
         
-        print(f'acid_strength {acid_strength} image_displacement_accumulated {image_displacement_accumulated}')
+        # print(f'acid_strength {acid_strength} image_displacement_accumulated {image_displacement_accumulated}')
         
         cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
         cam_img = cam_img_torch.cpu().numpy()
