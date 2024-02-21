@@ -32,8 +32,8 @@ sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 
 shape_cam=(600,800) 
-cam_man = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
-cam_man.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+cam = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
+cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 
 
 torch.set_grad_enabled(False)
@@ -92,7 +92,7 @@ sz = (512*2, 512*4)
 renderer = lt.Renderer(width=sz[1], height=sz[0])
 latents = torch.randn((1,4,64//1,64)).half().cuda()
 
-cam_img = cam_man.get_img()
+cam_img = cam.get_img()
 cam_img = np.flip(cam_img, axis=1)
 last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
@@ -140,7 +140,7 @@ while True:
         stop_recording = False        
     
     
-    cam_img = cam_man.get_img()
+    cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     #image = np.uint8(cam_img)
     
