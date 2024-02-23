@@ -1,21 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+possibly short term
+- smooth prompt blending A -> B
+- automatic prompt injection
+- investigate better noise
+- understand mem acid better
+- smooth continuation mode
+- objects floating around or being interactive
 
-#%%
-from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+nice for cosyne
+- physical objects
+
+long term
+- parallelization and stitching
+"""
+
+
+
+#%%`
+import sys
+sys.path.append('../')
+
+
+from mod_diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 import torch
 import time
 
-from diffusers import AutoencoderTiny
+from mod_diffusers import AutoencoderTiny
 from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
-from diffusers.utils import load_image
+from mod_diffusers.utils import load_image
 import random
 import xformers
 import triton
 import lunar_tools as lt
 from PIL import Image
 import numpy as np
-from diffusers.utils.torch_utils import randn_tensor
+from mod_diffusers.utils.torch_utils import randn_tensor
 import random as rn
 import numpy as np
 import xformers
@@ -25,6 +46,7 @@ import sys
 from datasets import load_dataset
 sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
+from u_unet_modulated import forward_modulated
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -34,11 +56,12 @@ torch.backends.cudnn.allow_tf32 = False
 shape_cam=(600,800) 
 do_compile = False
 use_community_prompts = True
+use_modulated_unet = True
 sz_renderwin = (512*2, 512*4)
-resolution_factor = 8
+resolution_factor = 5
 base_w = 20
 base_h = 15
-do_add_noise = True
+# do_add_noise = True
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
 
@@ -80,6 +103,7 @@ pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
+
 if do_compile:
     config = CompilationConfig.Default()
     config.enable_xformers = True
@@ -93,6 +117,8 @@ if do_compile:
     config.prefer_lowp_gemm = True
     pipe = compile(pipe, config)
 
+if use_modulated_unet:
+    pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
 # Promptblender
 blender = PromptBlender(pipe)
 
@@ -118,6 +144,10 @@ cam_resolution_h = base_h*8*resolution_factor
 # test resolution
 cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
+fp_aug = 'augs/baloon.png'
+aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
+aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
+
 last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
 
@@ -133,14 +163,29 @@ noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).ha
 image_displacement_accumulated = 0
 
 #%% LOOP
+
+modulations = {}
+if use_modulated_unet:
+    def noise_mod_func(sample):
+        noise =  torch.randn(sample.shape, device=sample.device, generator=torch.Generator(device=sample.device).manual_seed(1))
+        return noise    
+    
+    modulations['noise_mod_func'] = noise_mod_func
+    
+prompt_decoder = 'fire'
+prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_decoder, negative_pooled_prompt_embeds_decoder = blender.get_prompt_embeds(prompt_decoder, negative_prompt)
+
 while True:
     
-    torch.manual_seed(0)
+    do_fix_seed = not akai_midimix.get('F3', button_mode='toggle')
+    if do_fix_seed:
+        torch.manual_seed(0)
+        
     noise_img2img_fresh = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()#randn_tensor(shape, generator=generator, device=device, dtype=dtype)
     
     noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-
+    do_add_noise = akai_midimix.get("G4", button_mode="toggle")
     do_record_mic = akai_midimix.get("A3", button_mode="held_down")
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -172,19 +217,35 @@ while True:
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
     
+    do_aug_overlay = akai_midimix.get('C3', button_mode='toggle')
+    if do_aug_overlay:
+        aug_overlay = np.roll(aug_overlay,-10, axis=0)
+        mask_aug = aug_overlay[:,:,0] != 0
+        cam_img[mask_aug] = aug_overlay[mask_aug]
+    
     strength = akai_midimix.get("C1", val_min=0.5, val_max=1.0, val_default=0.5)
     num_inference_steps = int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
     
+    cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
+    apply_quant = akai_midimix.get("G3", button_mode="toggle")
+    torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     if do_add_noise:
-        cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
-
-        apply_quant = akai_midimix.get("G3", button_mode="toggle")
+        # coef noise
+        coef_noise = akai_midimix.get("E0", val_min=0, val_max=0.3, val_default=0.05)
+        t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
+        cam_img_torch += t_rand
+        torch_last_diffusion_image += t_rand
+        # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
+    
+    if apply_quant:
+        ## quantization
         quant_strength = int(akai_midimix.get("G2", val_min=1, val_max=100))
+        cam_img_torch = (cam_img_torch/quant_strength).floor() * quant_strength
 
-        if apply_quant:
-            cam_img_torch = (cam_img_torch/quant_strength).floor() * quant_strength
+    do_accumulate_acid = akai_midimix.get("C4", button_mode="toggle")
 
-
+    if do_accumulate_acid:
+        ## displacement controlled acid
         if last_cam_img_torch is None:
             last_cam_img_torch = cam_img_torch
             
@@ -205,17 +266,36 @@ while True:
             image_displacement_accumulated = 0
             
         acid_strength = 0.1 + image_displacement_accumulated * 1
-        coef_noise = akai_midimix.get("E0", val_min=0, val_max=0.3, val_default=0.05)
-        cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
-    
         acid_strength *= acid_gain
-        cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
-        cam_img = cam_img_torch.cpu().numpy()
         last_cam_img_torch = cam_img_torch.clone()
     else:
         acid_strength = akai_midimix.get("C0", val_min=0, val_max=1.0, val_default=0.05)
         
-    cam_img = (1.-acid_strength)*cam_img.astype(np.float32) + acid_strength*last_diffusion_image
+    # just a test
+    # cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch_last_diffusion_image
+    # if akai_midimix.get('E4', button_mode='pressed_once'):
+    #     xxx
+    cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
+    cam_img = cam_img_torch.cpu().numpy()
+        
+    if use_modulated_unet:
+        H2 = akai_midimix.get("H2", val_min=0, val_max=10, val_default=1)
+        modulations['b0_samp'] = H2
+        modulations['e2_samp'] = H2
+        
+        H1 = akai_midimix.get("H1", val_min=0, val_max=10, val_default=1)
+        modulations['b0_emb'] = H1
+        modulations['e2_emb'] = H1
+        
+        fract_mod = akai_midimix.get("G0", val_default=0, val_max=2, val_min=0)
+        if fract_mod > 1:
+            modulations['d*_extra_embeds'] = prompt_embeds_decoder    
+        else:
+            modulations['d*_extra_embeds'] = prompt_embeds
+    else:
+        modulations = None
+        
     
     use_debug_overlay = akai_midimix.get("H3", button_mode="toggle")
     if use_debug_overlay:
@@ -226,13 +306,14 @@ while True:
                       guidance_scale=0.5, prompt_embeds=prompt_embeds, 
                       negative_prompt_embeds=negative_prompt_embeds, 
                       pooled_prompt_embeds=pooled_prompt_embeds, 
-                      negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img).images[0]
+                      negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img, 
+                      modulations=modulations).images[0]
         
     last_diffusion_image = np.array(image, dtype=np.float32)
     
     do_antishift = akai_midimix.get("A4", button_mode="toggle")
     if do_antishift:
-        last_diffusion_image = np.roll(last_diffusion_image,-2,axis=1)
+        last_diffusion_image = np.roll(last_diffusion_image,-4,axis=0)
     
     # Render the image
     renderer.render(image)
