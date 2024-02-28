@@ -73,8 +73,7 @@ negative_prompt = "blurry, bland, black and white, monochromatic"
 # Example of .env content:
 # MODEL_TURBO=path/to/your/local/model_turbo
 # MODEL_VAE=path/to/your/local/model_vae
-
-load_dotenv()  # Load environment variables from a .env file if present
+load_dotenv()
 env_model_turbo = os.getenv("MODEL_TURBO")
 if env_model_turbo:
     model_turbo = env_model_turbo
