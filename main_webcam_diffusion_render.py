@@ -29,16 +29,19 @@ import torch
 import time
 
 from diffusers import AutoencoderTiny
-# from mod_diffusers import AutoencoderTiny
+#from mod_diffusers import AutoencoderTiny
+
 from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
 from diffusers.utils import load_image
+# from mod_diffusers.utils import load_image
 import random
 import xformers
 import triton
 import lunar_tools as lt
 from PIL import Image
 import numpy as np
-from mod_diffusers.utils.torch_utils import randn_tensor
+from diffusers.utils.torch_utils import randn_tensor
+# from mod_diffusers.utils.torch_utils import randn_tensor
 import random as rn
 import numpy as np
 import xformers
@@ -64,7 +67,7 @@ sz_renderwin = (512*2, 512*4)
 resolution_factor = 5
 base_w = 20
 base_h = 15
-# do_add_noise = True
+do_add_noise = True
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
 # load models
@@ -207,7 +210,7 @@ while True:
     
     noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-    do_add_noise = akai_midimix.get("G4", button_mode="toggle")
+    # do_add_noise = akai_midimix.get("G4", button_mode="toggle")
     do_record_mic = akai_midimix.get("A3", button_mode="held_down")
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -224,10 +227,13 @@ while True:
             
     get_new_prompt = akai_midimix.get('B3', button_mode='pressed_once')
     if get_new_prompt:
-        prompt = promptmanager.get_new_prompt()
-        print(f"New prompt: {prompt}")
-        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
-        stop_recording = False
+        try:
+            prompt = promptmanager.get_new_prompt()
+            print(f"New prompt: {prompt}")
+            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+            stop_recording = False
+        except Exception as e:
+            print(f"fail! {e}")
 
     save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
     if save_prompt:
