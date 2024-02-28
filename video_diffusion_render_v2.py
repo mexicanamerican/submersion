@@ -109,10 +109,13 @@ class PromptManager:
 
 
 # Diffusion Pipe
-pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16", local_files_only=True)
-pipe.to("cuda")
-pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16, local_files_only=True)
-pipe.vae = pipe.vae.cuda()
+
+gpu = "cuda:1"
+device = torch.device("cuda:1")
+pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_device=gpu, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
+pipe.to(gpu)
+pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device=gpu, torch_dtype=torch.float16, local_files_only=True)
+pipe.vae = pipe.vae.cuda(gpu)
 pipe.set_progress_bar_config(disable=True)
 
 
@@ -132,7 +135,7 @@ if do_compile:
 if use_modulated_unet:
     pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
 # Promptblender
-blender = PromptBlender(pipe)
+blender = PromptBlender(pipe,1) # cuda device index 
 # Renderer
 renderer = lt.Renderer(width=sz_renderwin[1], height=sz_renderwin[0])
 
@@ -146,7 +149,7 @@ speech_detector = lt.Speech2Text()
 
 # noise
 latents = blender.get_latents()
-noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()
+noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda(gpu)
 
 image_displacement_accumulated = 0
 
@@ -167,7 +170,7 @@ prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_deco
 #%%
 
 
-video_list = ['PG1_blue', 'EXTRA_SHOTS', 'BASE_MIX-001']
+video_list = ['EXTRA_SHOTS']
 
 # Promptmanager
 prompt_list = ['Astronauts, deep space, 4K, photorealistic', 'Cowboys, 4K, photorealistic', 'Miami 70s Fashion, Old TV show aesthetic', 'Funky Disco, analogue video aesthetic', 'Fitness Class, 4K, photorealistic', 'Indigenous people, black and white old video, documentary', 'Bull fighters, horse riding, 4K, photorealistic','People made of poop', 'Zombie horror scene, blood, 4K, bollywood']
@@ -180,7 +183,7 @@ for video in video_list:
     mr = lt.MovieReader(video+'.mp4')
     ms = lt.MovieSaver(video+'PROCESSED2.mp4', fps=mr.fps_movie)
     #total_frames = mr.nmb_frames
-    total_frames = mr.nmb_frames // 100
+    total_frames = mr.nmb_frames
     print(f"Number of frames: {total_frames}")
     prompt_change_interval = total_frames // len(promptmanager.prompts)  # Assuming promptmanager.prompts is a list of prompts
     
@@ -194,7 +197,7 @@ for video in video_list:
         if do_fix_seed:
             torch.manual_seed(0)
             
-        noise_img2img_fresh = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()#randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        noise_img2img_fresh = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda(gpu)#randn_tensor(shape, generator=generator, device=device, dtype=dtype)
         
         noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
         noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
