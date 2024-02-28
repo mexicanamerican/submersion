@@ -23,20 +23,25 @@ import sys
 sys.path.append('../')
 
 
-from mod_diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+# from mod_diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 import torch
 import time
 
-from mod_diffusers import AutoencoderTiny
+from diffusers import AutoencoderTiny
+#from mod_diffusers import AutoencoderTiny
+
 from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
-from mod_diffusers.utils import load_image
+from diffusers.utils import load_image
+# from mod_diffusers.utils import load_image
 import random
 import xformers
 import triton
 import lunar_tools as lt
 from PIL import Image
 import numpy as np
-from mod_diffusers.utils.torch_utils import randn_tensor
+from diffusers.utils.torch_utils import randn_tensor
+# from mod_diffusers.utils.torch_utils import randn_tensor
 import random as rn
 import numpy as np
 import xformers
@@ -47,12 +52,13 @@ from datasets import load_dataset
 sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
+import os
+from dotenv import load_dotenv #pip install python-dotenv
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 #%% VARS
-
 shape_cam=(600,800) 
 do_compile = False
 use_community_prompts = True
@@ -61,10 +67,29 @@ sz_renderwin = (512*2, 512*4)
 resolution_factor = 5
 base_w = 20
 base_h = 15
-# do_add_noise = True
+do_add_noise = True
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
+# load models
+# To use the models in offline mode, ensure you have a .env file in your project directory.
+# This file should contain the paths to your local models using the keys MODEL_TURBO and MODEL_VAE.
+# Example of .env content:
+# MODEL_TURBO=path/to/your/local/model_turbo
+# MODEL_VAE=path/to/your/local/model_vae
+load_dotenv()
+env_model_turbo = os.getenv("MODEL_TURBO")
+if env_model_turbo:
+    model_turbo = env_model_turbo
+    print(f"Using local model for model_turbo: {model_turbo}")
+else:
+    model_turbo = "stabilityai/sdxl-turbo"
 
+env_model_vae = os.getenv("MODEL_VAE")
+if env_model_vae:
+    model_vae = env_model_vae
+    print(f"Using local model for VAE: {model_vae}")
+else:
+    model_vae = "madebyollin/taesdxl"
 #%% Aux Func and classes
 class PromptManager:
     def __init__(self, use_community_prompts):
@@ -97,9 +122,9 @@ cam = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 
 # Diffusion Pipe
-pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16", local_files_only=True)
+pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
 pipe.to("cuda")
-pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16, local_files_only=True)
+pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch_dtype=torch.float16, local_files_only=True)
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
@@ -144,9 +169,9 @@ cam_resolution_h = base_h*8*resolution_factor
 # test resolution
 cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
-fp_aug = 'augs/baloon.png'
-aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
-aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
+# fp_aug = 'augs/baloon.png'
+# aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
+# aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
 last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
@@ -185,7 +210,7 @@ while True:
     
     noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-    do_add_noise = akai_midimix.get("G4", button_mode="toggle")
+    # do_add_noise = akai_midimix.get("G4", button_mode="toggle")
     do_record_mic = akai_midimix.get("A3", button_mode="held_down")
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -202,10 +227,13 @@ while True:
             
     get_new_prompt = akai_midimix.get('B3', button_mode='pressed_once')
     if get_new_prompt:
-        prompt = promptmanager.get_new_prompt()
-        print(f"New prompt: {prompt}")
-        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
-        stop_recording = False
+        try:
+            prompt = promptmanager.get_new_prompt()
+            print(f"New prompt: {prompt}")
+            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+            stop_recording = False
+        except Exception as e:
+            print(f"fail! {e}")
 
     save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
     if save_prompt:
@@ -217,11 +245,11 @@ while True:
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
     
-    do_aug_overlay = akai_midimix.get('C3', button_mode='toggle')
-    if do_aug_overlay:
-        aug_overlay = np.roll(aug_overlay,-10, axis=0)
-        mask_aug = aug_overlay[:,:,0] != 0
-        cam_img[mask_aug] = aug_overlay[mask_aug]
+    # do_aug_overlay = akai_midimix.get('C3', button_mode='toggle')
+    # if do_aug_overlay:
+    #     aug_overlay = np.roll(aug_overlay,-10, axis=0)
+    #     mask_aug = aug_overlay[:,:,0] != 0
+    #     cam_img[mask_aug] = aug_overlay[mask_aug]
     
     strength = akai_midimix.get("C1", val_min=0.5, val_max=1.0, val_default=0.5)
     num_inference_steps = int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
