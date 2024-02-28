@@ -68,6 +68,12 @@ base_h = 15
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
 # load models
+# To use the models in offline mode, ensure you have a .env file in your project directory.
+# This file should contain the paths to your local models using the keys MODEL_TURBO and MODEL_VAE.
+# Example of .env content:
+# MODEL_TURBO=path/to/your/local/model_turbo
+# MODEL_VAE=path/to/your/local/model_vae
+
 load_dotenv()  # Load environment variables from a .env file if present
 env_model_turbo = os.getenv("MODEL_TURBO")
 if env_model_turbo:
