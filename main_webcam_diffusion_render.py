@@ -25,16 +25,13 @@ sys.path.append('../')
 
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel
-# from mod_diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 import torch
 import time
 
 from diffusers import AutoencoderTiny
-#from mod_diffusers import AutoencoderTiny
 
 from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
 from diffusers.utils import load_image
-# from mod_diffusers.utils import load_image
 import random
 import xformers
 import triton
@@ -42,7 +39,6 @@ import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
-# from mod_diffusers.utils.torch_utils import randn_tensor
 import random as rn
 import numpy as np
 import xformers
@@ -383,6 +379,7 @@ while True:
     last_render_timestamp = time.time()
     
     lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
+
     
     last_diffusion_image = np.array(image, dtype=np.float32)
     
