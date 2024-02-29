@@ -61,7 +61,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 #%% VARS
 shape_cam=(600,800) 
-do_compile = False
+do_compile = True
 use_community_prompts = False
 use_modulated_unet = True
 sz_renderwin = (512*2, 512*4)
@@ -231,7 +231,7 @@ while True:
     
     noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-    # do_add_noise = akai_midimix.get("G4", button_mode="toggle")
+    do_colored_noise = akai_midimix.get("G4", button_mode="toggle")
     do_record_mic = akai_midimix.get("A3", button_mode="held_down")
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -281,7 +281,21 @@ while True:
     if do_add_noise:
         # coef noise
         coef_noise = akai_midimix.get("E0", val_min=0, val_max=0.3, val_default=0.05)
-        t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
+        
+        if do_colored_noise:
+            t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            
+            t_rand_r[t_rand_r<0.5] = 0
+            t_rand_g[t_rand_g<0.5] = 0
+            t_rand_b[t_rand_b<0.5] = 0
+            
+            # Combine the independent noise for each channel
+            t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
+
+        else:
+            t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
         cam_img_torch += t_rand
         torch_last_diffusion_image += t_rand
         # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
@@ -368,7 +382,7 @@ while True:
     time_difference = time.time() - last_render_timestamp
     last_render_timestamp = time.time()
     
-    print(f'fps: {np.round(1/time_difference)}')
+    lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
     
     last_diffusion_image = np.array(image, dtype=np.float32)
     
