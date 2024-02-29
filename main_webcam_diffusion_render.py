@@ -24,16 +24,14 @@ sys.path.append('../')
 
 
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
-# from mod_diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel
 import torch
 import time
 
 from diffusers import AutoencoderTiny
-#from mod_diffusers import AutoencoderTiny
 
 from sfast.compilers.stable_diffusion_pipeline_compiler import (compile, CompilationConfig)
 from diffusers.utils import load_image
-# from mod_diffusers.utils import load_image
 import random
 import xformers
 import triton
@@ -41,14 +39,13 @@ import lunar_tools as lt
 from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
-# from mod_diffusers.utils.torch_utils import randn_tensor
 import random as rn
 import numpy as np
 import xformers
 import triton
 import cv2
 import sys
-from datasets import load_dataset
+# from datasets import load_dataset
 sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
@@ -61,7 +58,7 @@ torch.backends.cudnn.allow_tf32 = False
 #%% VARS
 shape_cam=(600,800) 
 do_compile = False
-use_community_prompts = True
+use_community_prompts = False
 use_modulated_unet = True
 sz_renderwin = (512*2, 512*4)
 resolution_factor = 5
@@ -128,7 +125,11 @@ pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
-
+if use_modulated_unet:
+    #pipe.unet.forward = forward_modulated
+    pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
+    # pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
+    
 if do_compile:
     config = CompilationConfig.Default()
     config.enable_xformers = True
@@ -142,8 +143,6 @@ if do_compile:
     config.prefer_lowp_gemm = True
     pipe = compile(pipe, config)
 
-if use_modulated_unet:
-    pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
 # Promptblender
 blender = PromptBlender(pipe)
 
@@ -187,18 +186,36 @@ noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).ha
 
 image_displacement_accumulated = 0
 
+def get_sample_shape_unet(coord):
+    if coord[0] == 'e':
+        coef = float(2**int(coord[1]))
+        shape = [int(np.ceil(noise_resolution_h/coef)), int(np.ceil(noise_resolution_w/coef))]
+    elif coord[0] == 'b':
+        shape = [int(np.ceil(noise_resolution_h/4)), int(np.ceil(noise_resolution_w/4))]
+    else:
+        coef = float(2**(2-int(coord[1])))
+        shape = [int(np.ceil(noise_resolution_h/coef)), int(np.ceil(noise_resolution_w/coef))]
+        
+    return shape
+
 #%% LOOP
+
+def get_noise_for_modulations(shape):
+    return torch.randn(shape, device=pipe.device, generator=torch.Generator(device=pipe.device).manual_seed(1)).half()
 
 modulations = {}
 if use_modulated_unet:
-    def noise_mod_func(sample):
-        noise =  torch.randn(sample.shape, device=sample.device, generator=torch.Generator(device=sample.device).manual_seed(1))
-        return noise    
-    
-    modulations['noise_mod_func'] = noise_mod_func
+    modulations_noise = {}
+    for i in range(3):
+        modulations_noise[f'e{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'e{i}'))
+        modulations_noise[f'd{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'd{i}'))
+        
+    modulations_noise['b0'] = get_noise_for_modulations(get_sample_shape_unet('b0'))
     
 prompt_decoder = 'fire'
 prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_decoder, negative_pooled_prompt_embeds_decoder = blender.get_prompt_embeds(prompt_decoder, negative_prompt)
+
+last_render_timestamp = time.time()
 
 while True:
     
@@ -309,21 +326,28 @@ while True:
         
     if use_modulated_unet:
         H2 = akai_midimix.get("H2", val_min=0, val_max=10, val_default=1)
-        modulations['b0_samp'] = H2
-        modulations['e2_samp'] = H2
+        modulations['b0_samp'] = torch.tensor(H2, device=latents.device)
+        modulations['e2_samp'] = torch.tensor(H2, device=latents.device)
         
         H1 = akai_midimix.get("H1", val_min=0, val_max=10, val_default=1)
-        modulations['b0_emb'] = H1
-        modulations['e2_emb'] = H1
+        modulations['b0_emb'] = torch.tensor(H1, device=latents.device)
+        modulations['e2_emb'] = torch.tensor(H1, device=latents.device)
         
         fract_mod = akai_midimix.get("G0", val_default=0, val_max=2, val_min=0)
         if fract_mod > 1:
             modulations['d*_extra_embeds'] = prompt_embeds_decoder    
         else:
             modulations['d*_extra_embeds'] = prompt_embeds
+            
+        modulations['modulations_noise'] = modulations_noise
     else:
         modulations = None
         
+    if use_modulated_unet:
+        cross_attention_kwargs ={}
+        cross_attention_kwargs['modulations'] = modulations
+    else:
+        cross_attention_kwargs = None
     
     use_debug_overlay = akai_midimix.get("H3", button_mode="toggle")
     if use_debug_overlay:
@@ -335,8 +359,13 @@ while True:
                       negative_prompt_embeds=negative_prompt_embeds, 
                       pooled_prompt_embeds=pooled_prompt_embeds, 
                       negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img, 
-                      modulations=modulations).images[0]
+                      modulations=modulations,cross_attention_kwargs=cross_attention_kwargs).images[0]
         
+    time_difference = time.time() - last_render_timestamp
+    last_render_timestamp = time.time()
+    
+    print(f'fps: {np.round(1/time_difference)}')
+    
     last_diffusion_image = np.array(image, dtype=np.float32)
     
     do_antishift = akai_midimix.get("A4", button_mode="toggle")
