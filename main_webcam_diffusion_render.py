@@ -184,6 +184,7 @@ latents = blender.get_latents()
 noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()
 
 image_displacement_accumulated = 0
+image_displacement_array_accumulated = None
 
 def get_sample_shape_unet(coord):
     if coord[0] == 'e':
@@ -238,6 +239,7 @@ while True:
             try:
                 prompt = speech_detector.stop_recording()
                 print(f"New prompt: {prompt}")
+                
                 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
                 stop_recording = False
             except Exception as e:
@@ -252,13 +254,15 @@ while True:
             stop_recording = False
         except Exception as e:
             print(f"fail! {e}")
+            
+    
 
     save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
     
-    save_midi_settings = akai_midimix.get('D4', button_mode='pressed_once')
-    if save_midi_settings:
+    # save_midi_settings = akai_midimix.get('D4', button_mode='pressed_once')
+    # if save_midi_settings:
         
         path_midi_dump = "../psychoactive_surface/midi_dumps"
         fn = None
@@ -328,37 +332,53 @@ while True:
     
 
     do_accumulate_acid = akai_midimix.get("C4", button_mode="toggle")
+    do_local_accumulate_acid = akai_midimix.get("D4", button_mode="toggle")
 
     if do_accumulate_acid:
         ## displacement controlled acid
         if last_cam_img_torch is None:
             last_cam_img_torch = cam_img_torch
+        acid_gain = akai_midimix.get("C0", val_min=0, val_max=1.0, val_default=0.05)
             
         image_displacement_array = ((cam_img_torch - last_cam_img_torch)/255)**2
 
-        image_displacement = image_displacement_array.mean()
-        acid_gain = akai_midimix.get("C0", val_min=0, val_max=1.0, val_default=0.05)
-        image_displacement = (1-image_displacement*100)
-        if image_displacement < 0:
-            image_displacement = 0
-            
-        if image_displacement >= 0.5:
-            image_displacement_accumulated += 2e-2
+        
+        if do_local_accumulate_acid:
+            image_displacement_array = (1-image_displacement_array*100)
+            image_displacement_array = image_displacement_array.clamp(0)
+            if image_displacement_array_accumulated == None:
+                image_displacement_array_accumulated = torch.zeros_like(image_displacement_array)           
+            image_displacement_array_accumulated[image_displacement_array>=0.5] += 2e-2
+            image_displacement_array_accumulated[image_displacement_array<0.5] -= 2e-1
+            image_displacement_array_accumulated = image_displacement_array_accumulated.clamp(0)
+            acid_array = (image_displacement_array_accumulated + 0.1)*acid_gain
+        
         else:
-            image_displacement_accumulated -= 2e-1
-            
-        if image_displacement_accumulated < 0:
-            image_displacement_accumulated = 0
-            
-        acid_strength = 0.1 + image_displacement_accumulated * 1
-        acid_strength *= acid_gain
+            image_displacement = image_displacement_array.mean()
+            image_displacement = (1-image_displacement*100)
+            if image_displacement < 0:
+                image_displacement = 0
+                
+            if image_displacement >= 0.5:
+                image_displacement_accumulated += 2e-2
+            else:
+                image_displacement_accumulated -= 2e-1
+                
+            if image_displacement_accumulated < 0:
+                image_displacement_accumulated = 0
+                
+            acid_strength = 0.1 + image_displacement_accumulated * 1
+            acid_strength *= acid_gain
         last_cam_img_torch = cam_img_torch.clone()
     else:
         acid_strength = akai_midimix.get("C0", val_min=0, val_max=1.0, val_default=0.05)
         
     # just a test
     # cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch.from_numpy(last_diffusion_image).to(cam_img_torch)
-    cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch_last_diffusion_image
+    if do_accumulate_acid and do_local_accumulate_acid:
+        cam_img_torch = (1.-acid_array)*cam_img_torch + acid_array*torch_last_diffusion_image
+    else:
+        cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch_last_diffusion_image
     # if akai_midimix.get('E4', button_mode='pressed_once'):
     #     xxx
     cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
