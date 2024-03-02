@@ -45,7 +45,7 @@ import xformers
 import triton
 import cv2
 import sys
-# from datasets import load_dataset
+from datasets import load_dataset
 sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
@@ -53,15 +53,16 @@ import os
 from dotenv import load_dotenv #pip install python-dotenv
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False 
 
 #%% VARS
-shape_cam=(600,800) 
+# shape_cam=(600,800) 
+shape_cam=(300,400) 
 do_compile = True
 use_community_prompts = False
-use_modulated_unet = True
+
 sz_renderwin = (512*2, 512*4)
-resolution_factor = 5
+resolution_factor = 8
 base_w = 20
 base_h = 15
 do_add_noise = True
@@ -124,11 +125,9 @@ pipe.to("cuda")
 pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch_dtype=torch.float16, local_files_only=True)
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
+pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
 
-if use_modulated_unet:
-    #pipe.unet.forward = forward_modulated
-    pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
-    # pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
+
     
 if do_compile:
     config = CompilationConfig.Default()
@@ -204,21 +203,21 @@ def get_noise_for_modulations(shape):
     return torch.randn(shape, device=pipe.device, generator=torch.Generator(device=pipe.device).manual_seed(1)).half()
 
 modulations = {}
-if use_modulated_unet:
-    modulations_noise = {}
-    for i in range(3):
-        modulations_noise[f'e{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'e{i}'))
-        modulations_noise[f'd{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'd{i}'))
-        
-    modulations_noise['b0'] = get_noise_for_modulations(get_sample_shape_unet('b0'))
+modulations_noise = {}
+for i in range(3):
+    modulations_noise[f'e{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'e{i}'))
+    modulations_noise[f'd{i}'] = get_noise_for_modulations(get_sample_shape_unet(f'd{i}'))
+    
+modulations_noise['b0'] = get_noise_for_modulations(get_sample_shape_unet('b0'))
     
 prompt_decoder = 'fire'
 prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_decoder, negative_pooled_prompt_embeds_decoder = blender.get_prompt_embeds(prompt_decoder, negative_prompt)
 
 last_render_timestamp = time.time()
 
+use_modulated_unet = True
 while True:
-    
+    # use_modulated_unet = akai_midimix.get('H4', button_mode='toggle')
     do_fix_seed = not akai_midimix.get('F3', button_mode='toggle')
     if do_fix_seed:
         torch.manual_seed(0)
@@ -227,8 +226,10 @@ while True:
     
     noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
+    do_cam_coloring = akai_midimix.get("G3", button_mode="toggle")
     do_colored_noise = akai_midimix.get("G4", button_mode="toggle")
     do_record_mic = akai_midimix.get("A3", button_mode="held_down")
+    
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
             speech_detector.start_recording()
@@ -236,11 +237,11 @@ while True:
         if speech_detector.audio_recorder.is_recording:
             try:
                 prompt = speech_detector.stop_recording()
+                print(f"New prompt: {prompt}")
+                prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+                stop_recording = False
             except Exception as e:
                 print(f"FAIL {e}")
-            print(f"New prompt: {prompt}")
-            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
-            stop_recording = False
             
     get_new_prompt = akai_midimix.get('B3', button_mode='pressed_once')
     if get_new_prompt:
@@ -255,7 +256,29 @@ while True:
     save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
-            
+    
+    save_midi_settings = akai_midimix.get('D4', button_mode='pressed_once')
+    if save_midi_settings:
+        
+        path_midi_dump = "../psychoactive_surface/midi_dumps"
+        fn = None
+        os.makedirs(path_midi_dump, exist_ok=True)
+        parameters = []
+        from datetime import datetime
+        import yaml
+        if fn == None:
+            current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            fn = f'midi_dump_{current_datetime_string}.yml'
+        fp = os.path.join(path_midi_dump, fn)
+        for id_, name in akai_midimix.id_name.items():
+            value = akai_midimix.id_value[id_]
+            parameters.append({'id':id_, 'name':name, 'value':value})
+        
+        parameters.append({'prompt':prompt})
+        with open(fp, 'w') as file:
+            yaml.dump(parameters, file)
+        # akai_midimix.yaml_dump(path=path_midi_dump, prompt=prompt)
+    
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     
@@ -272,8 +295,15 @@ while True:
     num_inference_steps = int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
-    apply_quant = akai_midimix.get("G3", button_mode="toggle")
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    
+    if do_cam_coloring:
+        for c in range(3):
+            mask = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1) < 0.8).repeat(1, 1, 3)
+            mask[:,:,c] = 0
+            cam_img_torch[mask] = 255
+
+
     if do_add_noise:
         # coef noise
         coef_noise = akai_midimix.get("E0", val_min=0, val_max=0.3, val_default=0.05)
@@ -296,10 +326,6 @@ while True:
         torch_last_diffusion_image += t_rand
         # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
     
-    if apply_quant:
-        ## quantization
-        quant_strength = int(akai_midimix.get("G2", val_min=1, val_max=100))
-        cam_img_torch = (cam_img_torch/quant_strength).floor() * quant_strength
 
     do_accumulate_acid = akai_midimix.get("C4", button_mode="toggle")
 
@@ -354,8 +380,6 @@ while True:
             modulations['d*_extra_embeds'] = prompt_embeds
             
         modulations['modulations_noise'] = modulations_noise
-    else:
-        modulations = None
         
     if use_modulated_unet:
         cross_attention_kwargs ={}
