@@ -149,7 +149,13 @@ blender = PromptBlender(pipe)
 promptmanager = PromptManager(use_community_prompts)
 prompt = promptmanager.get_new_prompt()
 
-prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+fract = 0
+blender.set_prompt1(prompt)
+blender.set_prompt2(prompt)
+prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.blend_stored_embeddings(fract)
+# prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender
+blender.blend_stored_embeddings(fract)
+# prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
 
 # Renderer
 renderer = lt.Renderer(width=sz_renderwin[1], height=sz_renderwin[0])
@@ -237,25 +243,32 @@ while True:
     elif not do_record_mic:
         if speech_detector.audio_recorder.is_recording:
             try:
+                prompt_prev = prompt
                 prompt = speech_detector.stop_recording()
                 print(f"New prompt: {prompt}")
-                
-                prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
                 stop_recording = False
+                fract = 0
+                blender.set_prompt1(prompt_prev, negative_prompt)
+                blender.set_prompt2(prompt, negative_prompt)
+                
             except Exception as e:
                 print(f"FAIL {e}")
             
     get_new_prompt = akai_midimix.get('B3', button_mode='pressed_once')
     if get_new_prompt:
         try:
+            prompt_prev = prompt
             prompt = promptmanager.get_new_prompt()
             print(f"New prompt: {prompt}")
-            prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
             stop_recording = False
+            fract = 0
+            blender.set_prompt1(prompt_prev, negative_prompt)
+            blender.set_prompt2(prompt, negative_prompt)
         except Exception as e:
             print(f"fail! {e}")
             
     
+    prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.blend_stored_embeddings(fract)
 
     save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
     if save_prompt:
@@ -296,7 +309,8 @@ while True:
     #     cam_img[mask_aug] = aug_overlay[mask_aug]
     
     strength = akai_midimix.get("C1", val_min=0.5, val_max=1.0, val_default=0.5)
-    num_inference_steps = int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
+    num_inference_steps = 2 #int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
+    guidance_scale = akai_midimix.get("C2", val_min=0, val_max=1, val_default=0.5)
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
@@ -413,7 +427,7 @@ while True:
     else:
         image = pipe(image=Image.fromarray(cam_img.astype(np.uint8)), 
                       latents=latents, num_inference_steps=num_inference_steps, strength=strength, 
-                      guidance_scale=0.5, prompt_embeds=prompt_embeds, 
+                      guidance_scale=guidance_scale, prompt_embeds=prompt_embeds, 
                       negative_prompt_embeds=negative_prompt_embeds, 
                       pooled_prompt_embeds=pooled_prompt_embeds, 
                       negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img, 
@@ -433,6 +447,13 @@ while True:
     
     # Render the image
     renderer.render(image)
+    
+    # move fract forward
+    d_fract_embed = akai_midimix.get("A1", val_min=0.0, val_max=0.05, val_default=0)
+    fract += d_fract_embed
+    fract = np.clip(fract, 0, 1)
+    
+    
         
         
         
