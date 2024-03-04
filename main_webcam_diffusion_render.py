@@ -226,7 +226,8 @@ cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution
 last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
 
-akai_midimix = lt.MidiInput(device_name="akai_midimix")
+meta_input = lt.MetaInput()
+
 memory_matrix = np.linspace(0.1,0.4,cam_img.shape[1])
 memory_matrix = np.expand_dims(np.expand_dims(memory_matrix, 0), -1)
 speech_detector = lt.Speech2Text()
@@ -270,17 +271,17 @@ last_render_timestamp = time.time()
 fract = 0
 use_modulated_unet = True
 while True:
-    do_fix_seed = not akai_midimix.get('F3', button_mode='toggle')
+    do_fix_seed = not meta_input.get(akai_midimix='F3', button_mode='toggle')
     if do_fix_seed:
         torch.manual_seed(0)
         
     noise_img2img_fresh = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()#randn_tensor(shape, generator=generator, device=device, dtype=dtype)
     
-    noise_mixing = akai_midimix.get("D0", val_min=0, val_max=1.0, val_default=0)
+    noise_mixing = meta_input.get(akai_midimix="D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-    do_cam_coloring = akai_midimix.get("G3", button_mode="toggle")
-    do_gray_noise = akai_midimix.get("G4", button_mode="toggle")
-    do_record_mic = akai_midimix.get("A3", button_mode="held_down")
+    do_cam_coloring = meta_input.get(akai_midimix="G3", button_mode="toggle")
+    do_gray_noise = meta_input.get(akai_midimix="G4", button_mode="toggle")
+    do_record_mic = meta_input.get(akai_midimix="A3", button_mode="held_down")
     
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -299,7 +300,7 @@ while True:
             except Exception as e:
                 print(f"FAIL {e}")
             
-    get_new_prompt = akai_midimix.get('B3', button_mode='pressed_once')
+    get_new_prompt = meta_input.get(akai_midimix='B3', button_mode='pressed_once')
     if get_new_prompt:
         try:
             prompt_prev = prompt
@@ -315,11 +316,11 @@ while True:
     
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.blend_stored_embeddings(fract)
 
-    save_prompt = akai_midimix.get('B4', button_mode='pressed_once')
+    save_prompt = meta_input.get(akai_midimix='B4', button_mode='pressed_once')
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
     
-    # save_midi_settings = akai_midimix.get('D4', button_mode='pressed_once')
+    # save_midi_settings = meta_input.get(akai_midimix='D4', button_mode='pressed_once')
     # if save_midi_settings:
         
         path_midi_dump = "../submersion/midi_dumps"
@@ -347,22 +348,22 @@ while True:
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
     
-    # do_aug_overlay = akai_midimix.get('C3', button_mode='toggle')
+    # do_aug_overlay = meta_input.get(akai_midimix='C3', button_mode='toggle')
     # if do_aug_overlay:
     #     aug_overlay = np.roll(aug_overlay,-10, axis=0)
     #     mask_aug = aug_overlay[:,:,0] != 0
     #     cam_img[mask_aug] = aug_overlay[mask_aug]
     
-    strength = akai_midimix.get("C1", val_min=0.5, val_max=1.0, val_default=0.5)
-    num_inference_steps = 2 #int(akai_midimix.get("C2", val_min=2, val_max=10, val_default=2))
-    guidance_scale = akai_midimix.get("C2", val_min=0, val_max=1, val_default=0.5)
+    strength = meta_input.get(akai_midimix="C1", val_min=0.5, val_max=1.0, val_default=0.5)
+    num_inference_steps = 2 #int(meta_input.get(akai_midimix="C2", val_min=2, val_max=10, val_default=2))
+    guidance_scale = meta_input.get(akai_midimix="C2", val_min=0, val_max=1, val_default=0.5)
     # guidance_scale = 1
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
-    do_zoom = akai_midimix.get("H4", button_mode="toggle")
+    do_zoom = meta_input.get(akai_midimix="H4", button_mode="toggle")
     if do_zoom:
-        zoom_factor = akai_midimix.get("F0", val_min=0.8, val_max=1.2, val_default=1)
+        zoom_factor = meta_input.get(akai_midimix="F0", val_min=0.8, val_max=1.2, val_default=1)
         torch_last_diffusion_image = zoom_image_torch(torch_last_diffusion_image, zoom_factor)
     if do_cam_coloring:
         for c in range(3):
@@ -373,7 +374,7 @@ while True:
 
     if do_add_noise:
         # coef noise
-        coef_noise = akai_midimix.get("E0", val_min=0, val_max=0.3, val_default=0.03)
+        coef_noise = meta_input.get(akai_midimix="E0", val_min=0, val_max=0.3, val_default=0.03)
         
         if not do_gray_noise:
             t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
@@ -394,17 +395,17 @@ while True:
         # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
     
 
-    do_accumulate_acid = akai_midimix.get("C4", button_mode="toggle")
-    do_local_accumulate_acid = akai_midimix.get("D4", button_mode="toggle")
-    invert_accumulate_acid = akai_midimix.get("D3", button_mode="toggle")
-    # acid_persistence = akai_midimix.get("D1", val_min=0.01, val_max=0.99, val_default=0.5)
-    # acid_decay = akai_midimix.get("D2", val_min=0.01, val_max=0.5, val_default=0.2)
+    do_accumulate_acid = meta_input.get(akai_midimix="C4", button_mode="toggle")
+    do_local_accumulate_acid = meta_input.get(akai_midimix="D4", button_mode="toggle")
+    invert_accumulate_acid = meta_input.get(akai_midimix="D3", button_mode="toggle")
+    # acid_persistence = meta_input.get(akai_midimix="D1", val_min=0.01, val_max=0.99, val_default=0.5)
+    # acid_decay = meta_input.get(akai_midimix="D2", val_min=0.01, val_max=0.5, val_default=0.2)
     
     if do_accumulate_acid:
         ## displacement controlled acid
         if last_cam_img_torch is None:
             last_cam_img_torch = cam_img_torch
-        acid_gain = akai_midimix.get("C0", val_min=0, val_max=1.0, val_default=0.05)
+        acid_gain = meta_input.get(akai_midimix="C0", val_min=0, val_max=1.0, val_default=0.05)
             
         image_displacement_array = ((cam_img_torch - last_cam_img_torch)/255)**2
         
@@ -456,9 +457,9 @@ while True:
             acid_strength *= acid_gain
         last_cam_img_torch = cam_img_torch.clone()
     else:
-        acid_strength = akai_midimix.get("C0", val_min=0, val_max=0.8, val_default=0.11)
+        acid_strength = meta_input.get(akai_midimix="C0", val_min=0, val_max=0.8, val_default=0.11)
         
-    F2 = akai_midimix.get("F2", val_min=0, val_max=10.0, val_default=0)
+    F2 = meta_input.get(akai_midimix="F2", val_min=0, val_max=10.0, val_default=0)
     if F2 > 0:
         acid_strength = (np.sin(F2*float(time.time())) + 1)/2
         
@@ -468,21 +469,21 @@ while True:
         cam_img_torch = (1.-acid_array)*cam_img_torch + acid_array*torch_last_diffusion_image
     else:
         cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch_last_diffusion_image
-    # if akai_midimix.get('E4', button_mode='pressed_once'):
+    # if meta_input.get(akai_midimix='E4', button_mode='pressed_once'):
     #     xxx
     cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
     cam_img = cam_img_torch.cpu().numpy()
         
     if use_modulated_unet:
-        H2 = akai_midimix.get("H2", val_min=0, val_max=10, val_default=0)
+        H2 = meta_input.get(akai_midimix="H2", val_min=0, val_max=10, val_default=0)
         modulations['b0_samp'] = torch.tensor(H2, device=latents.device)
         modulations['e2_samp'] = torch.tensor(H2, device=latents.device)
         
-        H1 = akai_midimix.get("H1", val_min=1, val_max=10, val_default=2)
+        H1 = meta_input.get(akai_midimix="H1", val_min=1, val_max=10, val_default=2)
         modulations['b0_emb'] = torch.tensor(H1, device=latents.device)
         modulations['e2_emb'] = torch.tensor(H1, device=latents.device)
         
-        fract_mod = akai_midimix.get("G0", val_default=0, val_max=2, val_min=0)
+        fract_mod = meta_input.get(akai_midimix="G0", val_default=0, val_max=2, val_min=0)
         if fract_mod > 1:
             modulations['d*_extra_embeds'] = prompt_embeds_decoder    
         else:
@@ -496,7 +497,7 @@ while True:
     else:
         cross_attention_kwargs = None
     
-    use_debug_overlay = akai_midimix.get("H3", button_mode="toggle")
+    use_debug_overlay = meta_input.get(akai_midimix="H3", button_mode="toggle")
     if use_debug_overlay:
         image = cam_img.astype(np.uint8)
         if do_local_accumulate_acid:
@@ -513,12 +514,12 @@ while True:
     time_difference = time.time() - last_render_timestamp
     last_render_timestamp = time.time()
     
-    lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
+    # lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
 
     
     last_diffusion_image = np.array(image, dtype=np.float32)
     
-    do_antishift = akai_midimix.get("A4", button_mode="toggle")
+    do_antishift = meta_input.get(akai_midimix="A4", button_mode="toggle")
     if do_antishift:
         last_diffusion_image = np.roll(last_diffusion_image,-4,axis=0)
         # last_diffusion_image = zoom_image(last_diffusion_image, 1.5)
@@ -527,7 +528,7 @@ while True:
     renderer.render(image)
     
     # move fract forward
-    d_fract_embed = akai_midimix.get("A1", val_min=0.0005, val_max=0.05, val_default=0.001)
+    d_fract_embed = meta_input.get(akai_midimix="A1", val_min=0.0005, val_max=0.05, val_default=0.001)
     fract += d_fract_embed
     fract = np.clip(fract, 0, 1)
     print(fract)
