@@ -51,6 +51,13 @@ from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
 import os
 from dotenv import load_dotenv #pip install python-dotenv
+from kornia.filters.kernels import get_binary_kernel2d
+from typing import List, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False 
@@ -58,13 +65,19 @@ torch.backends.cudnn.allow_tf32 = False
 #%% VARS
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
-do_compile = True
-use_community_prompts = True
+do_compile = False
+use_community_prompts = False
 
-sz_renderwin = (512*2, 512*4)
+sz_renderwin = (512*2, int(512*2*16/9))
 resolution_factor = 8
 base_w = 20
 base_h = 15
+
+
+resolution_factor = 8 # native is 4
+base_w = 16
+base_h = 16
+
 do_add_noise = True
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
@@ -118,9 +131,82 @@ class PromptManager:
         with open(self.fp_save, "a", encoding="utf-8") as file:
             file.write(prompt + "\n")
             
-from scipy.ndimage import zoom
-
 import torch.nn.functional as F
+
+def _compute_zero_padding(kernel_size: Tuple[int, int]) -> Tuple[int, int]:
+    r"""Utility function that computes zero padding tuple."""
+    computed: List[int] = [(k - 1) // 2 for k in kernel_size]
+    return computed[0], computed[1]
+
+
+def median_blur(input: torch.Tensor,
+                kernel_size: Tuple[int, int]) -> torch.Tensor:
+    r"""Blurs an image using the median filter.
+
+    Args:
+        input (torch.Tensor): the input image with shape :math:`(B,C,H,W)`.
+        kernel_size (Tuple[int, int]): the blurring kernel size.
+
+    Returns:
+        torch.Tensor: the blurred input tensor with shape :math:`(B,C,H,W)`.
+
+    Example:
+        >>> input = torch.rand(2, 4, 5, 7)
+        >>> output = median_blur(input, (3, 3))
+        >>> output.shape
+        torch.Size([2, 4, 5, 7])
+    """
+    if not isinstance(input, torch.Tensor):
+        raise TypeError("Input type is not a torch.Tensor. Got {}"
+                        .format(type(input)))
+
+    if not len(input.shape) == 4:
+        raise ValueError("Invalid input shape, we expect BxCxHxW. Got: {}"
+                         .format(input.shape))
+
+    padding: Tuple[int, int] = _compute_zero_padding(kernel_size)
+
+    # prepare kernel
+    kernel: torch.Tensor = get_binary_kernel2d(kernel_size).to(input)
+    b, c, h, w = input.shape
+
+    # map the local window to single vector
+    features: torch.Tensor = F.conv2d(
+        input.reshape(b * c, 1, h, w), kernel, padding=padding, stride=1)
+    features = features.view(b, c, -1, h, w)  # BxCx(K_h * K_w)xHxW
+
+    # compute the median along the feature axis
+    median: torch.Tensor = torch.median(features, dim=2)[0]
+
+    return median
+
+class MedianBlur(nn.Module):
+    r"""Blurs an image using the median filter.
+
+    Args:
+        kernel_size (Tuple[int, int]): the blurring kernel size.
+
+    Returns:
+        torch.Tensor: the blurred input tensor.
+
+    Shape:
+        - Input: :math:`(B, C, H, W)`
+        - Output: :math:`(B, C, H, W)`
+
+    Example:
+        >>> input = torch.rand(2, 4, 5, 7)
+        >>> blur = MedianBlur((3, 3))
+        >>> output = blur(input)
+        >>> output.shape
+        torch.Size([2, 4, 5, 7])
+    """
+
+    def __init__(self, kernel_size: Tuple[int, int]) -> None:
+        super(MedianBlur, self).__init__()
+        self.kernel_size: Tuple[int, int] = kernel_size
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return median_blur(input, self.kernel_size)
 
 def zoom_image_torch(input_tensor, zoom_factor):
     # Ensure the input is a 4D tensor [batch_size, channels, height, width]
@@ -253,6 +339,8 @@ def get_sample_shape_unet(coord):
 
 #%% LOOP
 
+blur = MedianBlur((7, 7))
+
 def get_noise_for_modulations(shape):
     return torch.randn(shape, device=pipe.device, generator=torch.Generator(device=pipe.device).manual_seed(1)).half()
 
@@ -281,7 +369,7 @@ while True:
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
     do_cam_coloring = meta_input.get(akai_midimix="G3", button_mode="toggle")
     do_gray_noise = meta_input.get(akai_midimix="G4", button_mode="toggle")
-    do_record_mic = meta_input.get(akai_midimix="A3", button_mode="held_down")
+    do_record_mic = meta_input.get(akai_midimix="A3", akai_lpd8="A1", button_mode="held_down")
     
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
@@ -300,7 +388,7 @@ while True:
             except Exception as e:
                 print(f"FAIL {e}")
             
-    get_new_prompt = meta_input.get(akai_midimix='B3', button_mode='pressed_once')
+    get_new_prompt = meta_input.get(akai_midimix='B3', akai_lpd8='A0', button_mode='pressed_once')
     if get_new_prompt:
         try:
             prompt_prev = prompt
@@ -320,26 +408,26 @@ while True:
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
     
-    # save_midi_settings = meta_input.get(akai_midimix='D4', button_mode='pressed_once')
-    # if save_midi_settings:
+    # # save_midi_settings = meta_input.get(akai_midimix='D4', button_mode='pressed_once')
+    # # if save_midi_settings:
         
-        path_midi_dump = "../submersion/midi_dumps"
-        fn = None
-        os.makedirs(path_midi_dump, exist_ok=True)
-        parameters = []
-        from datetime import datetime
-        import yaml
-        if fn == None:
-            current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            fn = f'midi_dump_{current_datetime_string}.yml'
-        fp = os.path.join(path_midi_dump, fn)
-        for id_, name in akai_midimix.id_name.items():
-            value = akai_midimix.id_value[id_]
-            parameters.append({'id':id_, 'name':name, 'value':value})
+    #     path_midi_dump = "../submersion/midi_dumps"
+    #     fn = None
+    #     os.makedirs(path_midi_dump, exist_ok=True)
+    #     parameters = []
+    #     from datetime import datetime
+    #     import yaml
+    #     if fn == None:
+    #         current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    #         fn = f'midi_dump_{current_datetime_string}.yml'
+    #     fp = os.path.join(path_midi_dump, fn)
+    #     for id_, name in meta_input.id_name.items():
+    #         value = meta_input.id_value[id_]
+    #         parameters.append({'id':id_, 'name':name, 'value':value})
         
-        parameters.append({'prompt':prompt})
-        with open(fp, 'w') as file:
-            yaml.dump(parameters, file)
+    #     parameters.append({'prompt':prompt})
+    #     with open(fp, 'w') as file:
+    #         yaml.dump(parameters, file)
         # akai_midimix.yaml_dump(path=path_midi_dump, prompt=prompt)
     
     cam_img = cam.get_img()
@@ -360,10 +448,13 @@ while True:
     # guidance_scale = 1
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
+    
+    cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
+    
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
-    do_zoom = meta_input.get(akai_midimix="H4", button_mode="toggle")
+    do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
-        zoom_factor = meta_input.get(akai_midimix="F0", val_min=0.8, val_max=1.2, val_default=1)
+        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.8, val_max=1.2, val_default=1)
         torch_last_diffusion_image = zoom_image_torch(torch_last_diffusion_image, zoom_factor)
     if do_cam_coloring:
         for c in range(3):
@@ -395,9 +486,9 @@ while True:
         # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
     
 
-    do_accumulate_acid = meta_input.get(akai_midimix="C4", button_mode="toggle")
+    do_accumulate_acid = meta_input.get(akai_midimix="C4", akai_lpd8="B0", button_mode="toggle")
     do_local_accumulate_acid = meta_input.get(akai_midimix="D4", button_mode="toggle")
-    invert_accumulate_acid = meta_input.get(akai_midimix="D3", button_mode="toggle")
+    invert_accumulate_acid = meta_input.get(akai_midimix="D3", akai_lpd8="B1", button_mode="toggle")
     # acid_persistence = meta_input.get(akai_midimix="D1", val_min=0.01, val_max=0.99, val_default=0.5)
     # acid_decay = meta_input.get(akai_midimix="D2", val_min=0.01, val_max=0.5, val_default=0.2)
     
@@ -405,7 +496,7 @@ while True:
         ## displacement controlled acid
         if last_cam_img_torch is None:
             last_cam_img_torch = cam_img_torch
-        acid_gain = meta_input.get(akai_midimix="C0", val_min=0, val_max=1.0, val_default=0.05)
+        acid_gain = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=1.0, val_default=0.05)
             
         image_displacement_array = ((cam_img_torch - last_cam_img_torch)/255)**2
         
@@ -441,7 +532,7 @@ while True:
             if image_displacement >= 0.5:
                 image_displacement_accumulated += 2e-2
             else:
-                image_displacement_accumulated -= 2e-1
+                image_displacement_accumulated -= 4e-1
             # if image_displacement >= 0.5:
             #     image_displacement_accumulated += acid_persistence
             # else:
@@ -455,9 +546,10 @@ while True:
             else:
                 acid_strength = 0.1 + image_displacement_accumulated * 1
             acid_strength *= acid_gain
+            acid_strength = min(1, acid_strength)
         last_cam_img_torch = cam_img_torch.clone()
     else:
-        acid_strength = meta_input.get(akai_midimix="C0", val_min=0, val_max=0.8, val_default=0.11)
+        acid_strength = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.8, val_default=0.11)
         
     F2 = meta_input.get(akai_midimix="F2", val_min=0, val_max=10.0, val_default=0)
     if F2 > 0:
@@ -497,11 +589,14 @@ while True:
     else:
         cross_attention_kwargs = None
     
-    use_debug_overlay = meta_input.get(akai_midimix="H3", button_mode="toggle")
+    use_debug_overlay = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
     if use_debug_overlay:
         image = cam_img.astype(np.uint8)
         if do_local_accumulate_acid:
-            image = (image_displacement_array_accumulated*255).cpu().numpy().astype(np.uint8)
+            try:
+                image = (image_displacement_array_accumulated*255).cpu().numpy().astype(np.uint8)
+            except Exception as e:
+                print(f"bad error! {e}")
     else:
         image = pipe(image=Image.fromarray(cam_img.astype(np.uint8)), 
                       latents=latents, num_inference_steps=num_inference_steps, strength=strength, 
@@ -519,22 +614,22 @@ while True:
     
     last_diffusion_image = np.array(image, dtype=np.float32)
     
-    do_antishift = meta_input.get(akai_midimix="A4", button_mode="toggle")
+    do_antishift = meta_input.get(akai_midimix="A4", akai_lpd8="D0", button_mode="toggle")
+    x_shift = meta_input.get(akai_midimix="B0", akai_lpd8="H0", val_default=0, val_max=10, val_min=-10)
+    y_shift = meta_input.get(akai_midimix="B1", akai_lpd8="H1", val_default=0, val_max=10, val_min=-10)
     if do_antishift:
-        last_diffusion_image = np.roll(last_diffusion_image,-4,axis=0)
+        last_diffusion_image = np.roll(last_diffusion_image,int(y_shift),axis=0)
+        last_diffusion_image = np.roll(last_diffusion_image,int(x_shift),axis=1)
         # last_diffusion_image = zoom_image(last_diffusion_image, 1.5)
     
     # Render the image
     renderer.render(image)
     
     # move fract forward
-    d_fract_embed = meta_input.get(akai_midimix="A1", val_min=0.0005, val_max=0.05, val_default=0.001)
+    d_fract_embed = meta_input.get(akai_midimix="A1", akai_lpd8="E0", val_min=0.0005, val_max=0.05, val_default=0.005)
     fract += d_fract_embed
     fract = np.clip(fract, 0, 1)
-    print(fract)
     
-    # in_shape = last_diffusion_image.shape
-    # zoom_factor = 1.5
-    # zoomed_image = zoom_image(last_diffusion_image, 1.5) 
+
         
         
