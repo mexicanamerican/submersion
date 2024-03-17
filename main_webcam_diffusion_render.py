@@ -21,6 +21,8 @@ long term
 #%%`
 import sys
 sys.path.append('../')
+sys.path.append("../psychoactive_surface")
+sys.path.append("../garden4")
 
 
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
@@ -46,7 +48,6 @@ import triton
 import cv2
 import sys
 from datasets import load_dataset
-sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
 import os
@@ -62,13 +63,16 @@ torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False 
 
+import matplotlib.pyplot as plt
+from image_processing import multi_match_gpu
 #%% VARS
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
-do_compile = False
-use_community_prompts = False
+do_compile = True
+use_community_prompts = True
 
-sz_renderwin = (512*2, int(512*2*16/9))
+sz_renderwin = (int(512*2.09), int(512*3.85))
+# sz_renderwin = (512*2, int(512*2*16/9))
 resolution_factor = 8
 base_w = 20
 base_h = 15
@@ -105,9 +109,10 @@ else:
 class PromptManager:
     def __init__(self, use_community_prompts):
         self.use_community_prompts = use_community_prompts
-        self.hf_dataset = "Gustavosta/Stable-Diffusion-Prompts"
-        # self.hf_dataset = "FredZhang7/stable-diffusion-prompts-2.47M"
-        self.local_prompts_path = "../psychoactive_surface/good_prompts.txt"
+        # self.hf_dataset = "Gustavosta/Stable-Diffusion-Prompts"
+        self.hf_dataset = "FredZhang7/stable-diffusion-prompts-2.47M"
+        # self.local_prompts_path = "../psychoactive_surface/good_prompts.txt"
+        self.local_prompts_path = "good_prompts_harvested.txt"
         self.fp_save = "good_prompts_harvested.txt"
         if self.use_community_prompts:
             self.dataset = load_dataset(self.hf_dataset)
@@ -404,7 +409,7 @@ while True:
     
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.blend_stored_embeddings(fract)
 
-    save_prompt = meta_input.get(akai_midimix='B4', button_mode='pressed_once')
+    save_prompt = meta_input.get(akai_midimix='B4', akai_lpd8='C1', button_mode='pressed_once')
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
     
@@ -454,7 +459,7 @@ while True:
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
-        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.8, val_max=1.2, val_default=1)
+        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.9, val_max=1.1, val_default=1)
         torch_last_diffusion_image = zoom_image_torch(torch_last_diffusion_image, zoom_factor)
     if do_cam_coloring:
         for c in range(3):
@@ -465,7 +470,7 @@ while True:
 
     if do_add_noise:
         # coef noise
-        coef_noise = meta_input.get(akai_midimix="E0", val_min=0, val_max=0.3, val_default=0.03)
+        coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.1, val_default=0.03)
         
         if not do_gray_noise:
             t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
@@ -496,7 +501,7 @@ while True:
         ## displacement controlled acid
         if last_cam_img_torch is None:
             last_cam_img_torch = cam_img_torch
-        acid_gain = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=1.0, val_default=0.05)
+        acid_gain = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.5, val_default=0.05)
             
         image_displacement_array = ((cam_img_torch - last_cam_img_torch)/255)**2
         
@@ -555,6 +560,7 @@ while True:
     if F2 > 0:
         acid_strength = (np.sin(F2*float(time.time())) + 1)/2
         
+    
     # just a test
     # cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     if do_accumulate_acid and do_local_accumulate_acid:
@@ -564,6 +570,11 @@ while True:
     # if meta_input.get(akai_midimix='E4', button_mode='pressed_once'):
     #     xxx
     cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
+
+    color_matching = meta_input.get(akai_lpd8="G1", val_min=0, val_max=1, val_default=0.0)
+    if color_matching > 0.01:       
+        cam_img_torch, _ = multi_match_gpu([cam_img_torch, torch_last_diffusion_image], weights=[1-color_matching, color_matching], clip_max='auto', gpu=0,  is_input_tensor=True)
+
     cam_img = cam_img_torch.cpu().numpy()
         
     if use_modulated_unet:
@@ -571,7 +582,7 @@ while True:
         modulations['b0_samp'] = torch.tensor(H2, device=latents.device)
         modulations['e2_samp'] = torch.tensor(H2, device=latents.device)
         
-        H1 = meta_input.get(akai_midimix="H1", val_min=1, val_max=10, val_default=2)
+        H1 = meta_input.get(akai_midimix="H1", akai_lpd8="F1", val_min=1, val_max=10, val_default=2)
         modulations['b0_emb'] = torch.tensor(H1, device=latents.device)
         modulations['e2_emb'] = torch.tensor(H1, device=latents.device)
         
@@ -609,7 +620,7 @@ while True:
     time_difference = time.time() - last_render_timestamp
     last_render_timestamp = time.time()
     
-    # lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
+    lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
 
     
     last_diffusion_image = np.array(image, dtype=np.float32)
