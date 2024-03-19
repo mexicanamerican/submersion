@@ -42,6 +42,7 @@ from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
 # import random as rn
+
 import numpy as np
 import xformers
 import triton
@@ -58,6 +59,7 @@ from typing import List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision
 
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -69,7 +71,7 @@ from image_processing import multi_match_gpu
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
 do_compile = True
-use_community_prompts = True
+use_community_prompts = False
 
 sz_renderwin = (int(512*2.09), int(512*3.85))
 # sz_renderwin = (512*2, int(512*2*16/9))
@@ -264,8 +266,6 @@ pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
 
-
-    
 if do_compile:
     config = CompilationConfig.Default()
     config.enable_xformers = True
@@ -314,7 +314,7 @@ cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution
 # aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
 # aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
-last_diffusion_image = np.uint8(cam_img)
+# last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
 
 meta_input = lt.MetaInput()
@@ -327,6 +327,7 @@ speech_detector = lt.Speech2Text()
 latents = blender.get_latents()
 noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()
 
+torch_last_diffusion_image = torch.from_numpy(cam_img).to(latents.device, dtype=torch.float)
 image_displacement_accumulated = 0
 image_displacement_array_accumulated = None
 
@@ -456,7 +457,7 @@ while True:
     
     cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
     
-    torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    # torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
         zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.9, val_max=1.1, val_default=1)
@@ -473,16 +474,20 @@ while True:
         coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.1, val_default=0.03)
         
         if not do_gray_noise:
-            t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            # t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            # t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            # t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
             
-            t_rand_r[t_rand_r<0.5] = 0
-            t_rand_g[t_rand_g<0.5] = 0
-            t_rand_b[t_rand_b<0.5] = 0
-            
+            # t_rand_r[t_rand_r<0.5] = 0
+            # t_rand_g[t_rand_g<0.5] = 0
+            # t_rand_b[t_rand_b<0.5] = 0
+            # xx
             # Combine the independent noise for each channel
-            t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
+            # t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
+            
+            t_rand = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand[t_rand < 0.5] = 0
+
 
         else:
             t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
@@ -621,16 +626,19 @@ while True:
     last_render_timestamp = time.time()
     
     lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
-
-    
-    last_diffusion_image = np.array(image, dtype=np.float32)
+    try:
+        torch_last_diffusion_image = torchvision.transforms.functional.pil_to_tensor(image).to(latents.device, dtype=torch.float).permute(1,2,0)
+    except:
+        torch_last_diffusion_image = torch.from_numpy(image).to(latents.device, dtype=torch.float)
+    # last_diffusion_image = np.array(image, dtype=np.float32)
     
     do_antishift = meta_input.get(akai_midimix="A4", akai_lpd8="D0", button_mode="toggle")
-    x_shift = meta_input.get(akai_midimix="B0", akai_lpd8="H0", val_default=0, val_max=10, val_min=-10)
-    y_shift = meta_input.get(akai_midimix="B1", akai_lpd8="H1", val_default=0, val_max=10, val_min=-10)
+    x_shift = int(meta_input.get(akai_midimix="B0", akai_lpd8="H0", val_default=0, val_max=10, val_min=-10))
+    y_shift = int(meta_input.get(akai_midimix="B1", akai_lpd8="H1", val_default=0, val_max=10, val_min=-10))
     if do_antishift:
-        last_diffusion_image = np.roll(last_diffusion_image,int(y_shift),axis=0)
-        last_diffusion_image = np.roll(last_diffusion_image,int(x_shift),axis=1)
+        # last_diffusion_image = np.roll(last_diffusion_image,int(y_shift),axis=0)
+        # last_diffusion_image = np.roll(last_diffusion_image,int(x_shift),axis=1)
+        torch_last_diffusion_image = torch.roll(torch_last_diffusion_image, (y_shift, x_shift), (0,1))
         # last_diffusion_image = zoom_image(last_diffusion_image, 1.5)
     
     # Render the image
