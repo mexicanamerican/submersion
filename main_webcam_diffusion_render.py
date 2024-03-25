@@ -58,8 +58,8 @@ torch.backends.cudnn.allow_tf32 = False
 #%% VARS
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
-do_compile = True
-use_community_prompts = True
+do_compile = False
+use_community_prompts = False
 
 sz_renderwin = (512*2, 512*4)
 resolution_factor = 8
@@ -531,7 +531,7 @@ while True:
     d_fract_embed = meta_input.get(akai_midimix="A1", val_min=0.0005, val_max=0.05, val_default=0.001)
     fract += d_fract_embed
     fract = np.clip(fract, 0, 1)
-    print(fract)
+    # print(fract)
     
     # in_shape = last_diffusion_image.shape
     # zoom_factor = 1.5
