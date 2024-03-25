@@ -37,7 +37,7 @@ import os
 from dotenv import load_dotenv #pip install python-dotenv
 from kornia.filters.kernels import get_binary_kernel2d
 from typing import List, Tuple
-
+import threading
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,7 +50,7 @@ torch.backends.cudnn.allow_tf32 = False
 # shape_cam=(600,800)
 aspect_ratio = 1.25
 shape_cam=(512, int(512*aspect_ratio))
-do_compile = False
+do_compile = True
 use_community_prompts = False
 sz_renderwin = (512*2, int(512*2*aspect_ratio))
 
@@ -227,46 +227,63 @@ def ten2img(ten):
 
 #%% depth estimation
 class DepthEstimator():
-    def __init__(self, model_type="DPT_Large", device='cpu'):
+    def __init__(self, model_type="MiDaS_small", device='cpu', use_threaded=False):
+        # model_types: MiDaS_small, DPT_Hybrid, DPT_Large
+        self.device = torch.device("cuda" if device == 'cuda' and torch.cuda.is_available() else "cpu")
+        self.use_threaded = use_threaded
         
-        midas = torch.hub.load("intel-isl/MiDaS", model_type)
-        if device == 'cpu':
-            device = torch.device("cpu")
-        else:
-            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-            
-        midas.to(device)
-        midas.eval()
-        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        self.midas = torch.hub.load("intel-isl/MiDaS", model_type).to(self.device).eval()
+        self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
         
-        if model_type == "DPT_Large" or model_type == "DPT_Hybrid":
-            transform = midas_transforms.dpt_transform
+        if model_type in ["DPT_Large", "DPT_Hybrid"]:
+            self.transform = self.midas_transforms.dpt_transform
         else:
-            transform = midas_transforms.small_transform
-            
-        self.midas = midas
+            self.transform = self.midas_transforms.small_transform
+        
+        self.last_depth_map = None
+        self.latest_img = None
+        if self.use_threaded:
+            self.lock = threading.Lock()
+            self.thread = threading.Thread(target=self.process_latest_image, daemon=True)
+            self.thread.start()
+
+    def update_img(self, img):
+        if self.use_threaded:
+            with self.lock:
+                self.latest_img = img
+        else:
+            self.last_depth_map = self.estimate(img)
+
+    def process_latest_image(self):
+        while True:
+            if self.latest_img is not None:
+                with self.lock:
+                    img_to_process = self.latest_img
+                    self.latest_img = None
+                self.last_depth_map = self.estimate(img_to_process)
+            else:
+                time.sleep(0.05)
 
     def estimate(self, img):
-        input_batch = transform(img).to(device)
+        input_batch = self.transform(img).to(self.device)
         with torch.no_grad():
-            prediction = midas(input_batch)
-        
+            prediction = self.midas(input_batch)
             prediction = torch.nn.functional.interpolate(
                 prediction.unsqueeze(1),
                 size=img.shape[:2],
                 mode="bicubic",
                 align_corners=False,
             ).squeeze()
-        
         output = prediction.cpu().numpy()
         return output
-
 
 
 
 #%% Inits
 cam = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+
+depth_estimator = DepthEstimator(use_threaded=True)
 
 # Diffusion Pipe
 pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
@@ -325,8 +342,6 @@ last_cam_img_torch = None
 
 meta_input = lt.MetaInput()
 
-memory_matrix = np.linspace(0.1,0.4,cam_img.shape[1])
-memory_matrix = np.expand_dims(np.expand_dims(memory_matrix, 0), -1)
 speech_detector = lt.Speech2Text()
 
 # noise
@@ -371,6 +386,8 @@ use_modulated_unet = True
 
 diffusion_mode_active = False
 nmb_diffusion_frames_shown = 0
+nmb_active_ramp = 0
+ramping_up = True
 
 while True:
     do_fix_seed = not meta_input.get(akai_midimix='F3', button_mode='toggle')
@@ -424,8 +441,10 @@ while True:
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     
+    
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
+    depth_estimator.update_img(cam_img)
     cam_img_orig = cam_img.copy()
     
     strength = meta_input.get(akai_midimix="C1", val_min=0.5, val_max=1.0, val_default=0.5)
@@ -437,6 +456,7 @@ while True:
     cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
     
     torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    
     do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
         zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.8, val_max=1.2, val_default=1)
@@ -489,6 +509,7 @@ while True:
         cross_attention_kwargs = None
     
     nmb_diffusion_frames_max = int(meta_input.get(akai_lpd8="H1", val_min=1, val_max=5))
+    nmb_diffusion_frames_ramp = int(meta_input.get(akai_lpd8="G1", val_min=1, val_max=10))
     p_camera = meta_input.get(akai_lpd8="H0", val_min=0.9, val_max=1.0)
     
     use_debug_overlay = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
@@ -502,25 +523,56 @@ while True:
                   modulations=modulations,cross_attention_kwargs=cross_attention_kwargs).images[0]
     
 
-        
     
     if not diffusion_mode_active:
         if np.random.rand() > p_camera:
             diffusion_mode_active = True
             nmb_diffusion_frames_shown = 0
-            
+         
+    if use_debug_overlay:
+        diffusion_mode_active = True    
+    
+    thresh_depth = meta_input.get(akai_lpd8="G0", val_min=500, val_max=1000, val_default=650)
+    
     if diffusion_mode_active:
-        image = image_diffusion
+        if depth_estimator.last_depth_map is not None:
+            mask = depth_estimator.last_depth_map > thresh_depth
+            mask = mask.astype(np.float32)
+            mask = cv2.GaussianBlur(mask, (21, 21), 0)
+            mask = mask / mask.max()
+            image = np.zeros_like(image_diffusion)
+            
+            if ramping_up:
+                nmb_active_ramp += 1
+            else:
+                nmb_active_ramp -= 1
+            
+            # print(f"nmb_active_ramp {nmb_active_ramp}")
+            if nmb_active_ramp >= nmb_diffusion_frames_ramp:
+                ramping_up = False
+            elif nmb_active_ramp <= 0:
+                ramping_up = True
+                diffusion_mode_active = False
+                
+            fract_ramp = nmb_active_ramp / nmb_diffusion_frames_ramp
+            image_diffusion_ramped = np.asarray(image_diffusion).astype(np.float32)
+            image_diffusion_ramped *= fract_ramp
+            image_diffusion_ramped += (1-fract_ramp) * cam_img
+            
+            image = mask[..., np.newaxis] * image_diffusion_ramped + (1 - mask[..., np.newaxis]) * cam_img_orig
+
+    
+            
         nmb_diffusion_frames_shown += 1
     else:
         image = cam_img_orig
         
-    if diffusion_mode_active and nmb_diffusion_frames_shown >= nmb_diffusion_frames_max:
-        diffusion_mode_active = False
+    
+    # if diffusion_mode_active and nmb_diffusion_frames_shown >= nmb_diffusion_frames_max:
+    #     diffusion_mode_active = False
     
 
-    if use_debug_overlay:
-        image = image_diffusion
+
         # image = np.asarray(image).astype(np.float32)
         # image *= 0.5
         # image += 0.5*cam_img
