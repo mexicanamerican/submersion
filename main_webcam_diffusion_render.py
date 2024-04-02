@@ -53,6 +53,7 @@ import os
 from dotenv import load_dotenv #pip install python-dotenv
 from kornia.filters.kernels import get_binary_kernel2d
 from typing import List, Tuple
+from human_seg import HumanSeg
 
 import torch
 import torch.nn as nn
@@ -62,10 +63,11 @@ torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False 
 
+# key keys: H3 ->  B3/A3 -> E0 (noise) -> C0 (acid) -> A4 (B0+B1)
 #%% VARS
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
-do_compile = False
+do_compile = True
 use_community_prompts = False
 
 sz_renderwin = (512*2, int(512*2*16/9))
@@ -273,6 +275,9 @@ if do_compile:
     config.preserve_parameters = False
     config.prefer_lowp_gemm = True
     pipe = compile(pipe, config)
+    
+# human body segmentation
+human_seg = HumanSeg()
 
 # Promptblender
 blender = PromptBlender(pipe)
@@ -432,6 +437,12 @@ while True:
     
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
+    
+    # mask the body
+    apply_body_mask = meta_input.get(akai_midimix="E3", button_mode="toggle")
+    if apply_body_mask:
+        mask = human_seg.get_mask(cam_img)
+        cam_img *= np.expand_dims(mask, axis=2)
     
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
