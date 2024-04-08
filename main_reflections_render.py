@@ -1,28 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-possibly short term
-- smooth prompt blending A -> B
-- automatic prompt injection
-- investigate better noise
-- understand mem acid better
-- smooth continuation mode
-- objects floating around or being interactive
-
-nice for cosyne
-- physical objects
-
-long term
-- parallelization and stitching
-"""
-
 
 
 #%%`
 import sys
 sys.path.append('../')
-sys.path.append("../psychoactive_surface")
-sys.path.append("../garden4")
 
 
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
@@ -42,62 +24,44 @@ from PIL import Image
 import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
 # import random as rn
-
 import numpy as np
 import xformers
 import triton
 import cv2
 import sys
 from datasets import load_dataset
+sys.path.append("../psychoactive_surface")
 from prompt_blender import PromptBlender
 from u_unet_modulated import forward_modulated
 import os
 from dotenv import load_dotenv #pip install python-dotenv
 from kornia.filters.kernels import get_binary_kernel2d
 from typing import List, Tuple
-from human_seg import HumanSeg
-
+import threading
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
 
 torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False 
 
-<<<<<<< HEAD
-import matplotlib.pyplot as plt
-from image_processing import multi_match_gpu
-=======
-# key keys: H3 ->  B3/A3 -> E0 (noise) -> C0 (acid) -> A4 (B0+B1)
->>>>>>> b05dcdf9a2d4da0705143d4e41c7138a572e6d42
 #%% VARS
-# shape_cam=(600,800) 
-shape_cam=(300,400) 
+# shape_cam=(600,800)
+aspect_ratio = 1.25
+shape_cam=(512, int(512*aspect_ratio))
 do_compile = True
 use_community_prompts = False
-
-sz_renderwin = (int(512*2.09), int(512*3.85))
-# sz_renderwin = (512*2, int(512*2*16/9))
-resolution_factor = 8
-base_w = 20
-base_h = 15
+sz_renderwin = (512*2, int(512*2*aspect_ratio))
 
 
-resolution_factor = 8 # native is 4
-base_w = 16
+resolution_factor = 4 # native is 4
+base_w = int(16*aspect_ratio)
 base_h = 16
 
 do_add_noise = True
 negative_prompt = "blurry, bland, black and white, monochromatic"
 
-# load models
-# To use the models in offline mode, ensure you have a .env file in your project directory.
-# This file should contain the paths to your local models using the keys MODEL_TURBO and MODEL_VAE.
-# Example of .env content:
-# MODEL_TURBO=path/to/your/local/model_turbo
-# MODEL_VAE=path/to/your/local/model_vae
 load_dotenv()
 env_model_turbo = os.getenv("MODEL_TURBO")
 if env_model_turbo:
@@ -112,14 +76,15 @@ if env_model_vae:
     print(f"Using local model for VAE: {model_vae}")
 else:
     model_vae = "madebyollin/taesdxl"
+    
+    
 #%% Aux Func and classes
 class PromptManager:
     def __init__(self, use_community_prompts):
         self.use_community_prompts = use_community_prompts
-        # self.hf_dataset = "Gustavosta/Stable-Diffusion-Prompts"
-        self.hf_dataset = "FredZhang7/stable-diffusion-prompts-2.47M"
-        # self.local_prompts_path = "../psychoactive_surface/good_prompts.txt"
-        self.local_prompts_path = "good_prompts_harvested.txt"
+        self.hf_dataset = "Gustavosta/Stable-Diffusion-Prompts"
+        # self.hf_dataset = "FredZhang7/stable-diffusion-prompts-2.47M"
+        self.local_prompts_path = "../psychoactive_surface/good_prompts.txt"
         self.fp_save = "good_prompts_harvested.txt"
         if self.use_community_prompts:
             self.dataset = load_dataset(self.hf_dataset)
@@ -258,10 +223,67 @@ def zoom_image_torch(input_tensor, zoom_factor):
 
 def ten2img(ten):
     return ten.cpu().numpy().astype(np.uint8)
-import matplotlib.pyplot as plt
+
+
+#%% depth estimation
+class DepthEstimator():
+    def __init__(self, model_type="MiDaS_small", device='cpu', use_threaded=False):
+        # model_types: MiDaS_small, DPT_Hybrid, DPT_Large
+        self.device = torch.device("cuda" if device == 'cuda' and torch.cuda.is_available() else "cpu")
+        self.use_threaded = use_threaded
+        
+        self.midas = torch.hub.load("intel-isl/MiDaS", model_type).to(self.device).eval()
+        self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        
+        if model_type in ["DPT_Large", "DPT_Hybrid"]:
+            self.transform = self.midas_transforms.dpt_transform
+        else:
+            self.transform = self.midas_transforms.small_transform
+        
+        self.last_depth_map = None
+        self.latest_img = None
+        if self.use_threaded:
+            self.lock = threading.Lock()
+            self.thread = threading.Thread(target=self.process_latest_image, daemon=True)
+            self.thread.start()
+
+    def update_img(self, img):
+        if self.use_threaded:
+            with self.lock:
+                self.latest_img = img
+        else:
+            self.last_depth_map = self.estimate(img)
+
+    def process_latest_image(self):
+        while True:
+            if self.latest_img is not None:
+                with self.lock:
+                    img_to_process = self.latest_img
+                    self.latest_img = None
+                self.last_depth_map = self.estimate(img_to_process)
+            else:
+                time.sleep(0.05)
+
+    def estimate(self, img):
+        input_batch = self.transform(img).to(self.device)
+        with torch.no_grad():
+            prediction = self.midas(input_batch)
+            prediction = torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=img.shape[:2],
+                mode="bicubic",
+                align_corners=False,
+            ).squeeze()
+        output = prediction.cpu().numpy()
+        return output
+
+
+
 #%% Inits
 cam = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+
+depth_estimator = DepthEstimator(use_threaded=True)
 
 # Diffusion Pipe
 pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
@@ -270,7 +292,7 @@ pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
-
+    
 if do_compile:
     config = CompilationConfig.Default()
     config.enable_xformers = True
@@ -283,9 +305,6 @@ if do_compile:
     config.preserve_parameters = False
     config.prefer_lowp_gemm = True
     pipe = compile(pipe, config)
-    
-# human body segmentation
-human_seg = HumanSeg()
 
 # Promptblender
 blender = PromptBlender(pipe)
@@ -318,24 +337,17 @@ cam_resolution_h = base_h*8*resolution_factor
 # test resolution
 cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
-# fp_aug = 'augs/baloon.png'
-# aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
-# aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
-
-# last_diffusion_image = np.uint8(cam_img)
+last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
 
 meta_input = lt.MetaInput()
 
-memory_matrix = np.linspace(0.1,0.4,cam_img.shape[1])
-memory_matrix = np.expand_dims(np.expand_dims(memory_matrix, 0), -1)
 speech_detector = lt.Speech2Text()
 
 # noise
 latents = blender.get_latents()
 noise_img2img_orig = torch.randn((1,4,noise_resolution_h,noise_resolution_w)).half().cuda()
 
-torch_last_diffusion_image = torch.from_numpy(cam_img).to(latents.device, dtype=torch.float)
 image_displacement_accumulated = 0
 image_displacement_array_accumulated = None
 
@@ -352,8 +364,7 @@ def get_sample_shape_unet(coord):
     return shape
 
 #%% LOOP
-
-blur = MedianBlur((7, 7))
+blur = MedianBlur((3, 3))
 
 def get_noise_for_modulations(shape):
     return torch.randn(shape, device=pipe.device, generator=torch.Generator(device=pipe.device).manual_seed(1)).half()
@@ -372,6 +383,12 @@ prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_deco
 last_render_timestamp = time.time()
 fract = 0
 use_modulated_unet = True
+
+diffusion_mode_active = False
+nmb_diffusion_frames_shown = 0
+nmb_active_ramp = 0
+ramping_up = True
+
 while True:
     do_fix_seed = not meta_input.get(akai_midimix='F3', button_mode='toggle')
     if do_fix_seed:
@@ -381,7 +398,6 @@ while True:
     
     noise_mixing = meta_input.get(akai_midimix="D0", val_min=0, val_max=1.0, val_default=0)
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
-    do_cam_coloring = meta_input.get(akai_midimix="G3", button_mode="toggle")
     do_gray_noise = meta_input.get(akai_midimix="G4", button_mode="toggle")
     do_record_mic = meta_input.get(akai_midimix="A3", akai_lpd8="A1", button_mode="held_down")
     
@@ -396,7 +412,7 @@ while True:
                 print(f"New prompt: {prompt}")
                 stop_recording = False
                 fract = 0
-                blender.set_prompt1(prompt_prev, negative_prompt)
+                blender.set_prompt1(prompt, negative_prompt)
                 blender.set_prompt2(prompt, negative_prompt)
                 
             except Exception as e:
@@ -410,7 +426,7 @@ while True:
             print(f"New prompt: {prompt}")
             stop_recording = False
             fract = 0
-            blender.set_prompt1(prompt_prev, negative_prompt)
+            blender.set_prompt1(prompt, negative_prompt)
             blender.set_prompt2(prompt, negative_prompt)
         except Exception as e:
             print(f"fail! {e}")
@@ -418,200 +434,73 @@ while True:
     
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.blend_stored_embeddings(fract)
 
-    save_prompt = meta_input.get(akai_midimix='B4', akai_lpd8='C1', button_mode='pressed_once')
+    save_prompt = meta_input.get(akai_midimix='B4', button_mode='pressed_once')
     if save_prompt:
         promptmanager.save_harvested_prompt(prompt)
-    
-    # # save_midi_settings = meta_input.get(akai_midimix='D4', button_mode='pressed_once')
-    # # if save_midi_settings:
-        
-    #     path_midi_dump = "../submersion/midi_dumps"
-    #     fn = None
-    #     os.makedirs(path_midi_dump, exist_ok=True)
-    #     parameters = []
-    #     from datetime import datetime
-    #     import yaml
-    #     if fn == None:
-    #         current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    #         fn = f'midi_dump_{current_datetime_string}.yml'
-    #     fp = os.path.join(path_midi_dump, fn)
-    #     for id_, name in meta_input.id_name.items():
-    #         value = meta_input.id_value[id_]
-    #         parameters.append({'id':id_, 'name':name, 'value':value})
-        
-    #     parameters.append({'prompt':prompt})
-    #     with open(fp, 'w') as file:
-    #         yaml.dump(parameters, file)
-        # akai_midimix.yaml_dump(path=path_midi_dump, prompt=prompt)
     
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     
-    # mask the body
-    apply_body_mask = meta_input.get(akai_midimix="E3", button_mode="toggle")
-    if apply_body_mask:
-        mask = human_seg.get_mask(cam_img)
-        cam_img *= np.expand_dims(mask, axis=2)
     
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
-    
-    # do_aug_overlay = meta_input.get(akai_midimix='C3', button_mode='toggle')
-    # if do_aug_overlay:
-    #     aug_overlay = np.roll(aug_overlay,-10, axis=0)
-    #     mask_aug = aug_overlay[:,:,0] != 0
-    #     cam_img[mask_aug] = aug_overlay[mask_aug]
+    depth_estimator.update_img(cam_img)
+    cam_img_orig = cam_img.copy()
     
     strength = meta_input.get(akai_midimix="C1", val_min=0.5, val_max=1.0, val_default=0.5)
     num_inference_steps = 2 #int(meta_input.get(akai_midimix="C2", val_min=2, val_max=10, val_default=2))
     guidance_scale = meta_input.get(akai_midimix="C2", val_min=0, val_max=1, val_default=0.5)
-    # guidance_scale = 1
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
     
     cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
     
-    # torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
+    
     do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
-        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.9, val_max=1.1, val_default=1)
+        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.8, val_max=1.2, val_default=1)
         torch_last_diffusion_image = zoom_image_torch(torch_last_diffusion_image, zoom_factor)
-    if do_cam_coloring:
-        for c in range(3):
-            mask = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1) < 0.8).repeat(1, 1, 3)
-            mask[:,:,c] = 0
-            cam_img_torch[mask] = 255
+
 
 
     if do_add_noise:
         # coef noise
-        coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.1, val_default=0.03)
+        coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.3, val_default=0.03)
         
         if not do_gray_noise:
-            # t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            # t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            # t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
+            t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
             
-            # t_rand_r[t_rand_r<0.5] = 0
-            # t_rand_g[t_rand_g<0.5] = 0
-            # t_rand_b[t_rand_b<0.5] = 0
-            # xx
+            t_rand_r[t_rand_r<0.5] = 0
+            t_rand_g[t_rand_g<0.5] = 0
+            t_rand_b[t_rand_b<0.5] = 0
+            
             # Combine the independent noise for each channel
-            # t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
-            
-            t_rand = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            t_rand[t_rand < 0.5] = 0
-
+            t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
 
         else:
             t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
         cam_img_torch += t_rand
         torch_last_diffusion_image += t_rand
-        # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
     
 
     do_accumulate_acid = meta_input.get(akai_midimix="C4", akai_lpd8="B0", button_mode="toggle")
     do_local_accumulate_acid = meta_input.get(akai_midimix="D4", button_mode="toggle")
     invert_accumulate_acid = meta_input.get(akai_midimix="D3", akai_lpd8="B1", button_mode="toggle")
-    # acid_persistence = meta_input.get(akai_midimix="D1", val_min=0.01, val_max=0.99, val_default=0.5)
-    # acid_decay = meta_input.get(akai_midimix="D2", val_min=0.01, val_max=0.5, val_default=0.2)
     
-    if do_accumulate_acid:
-        ## displacement controlled acid
-        if last_cam_img_torch is None:
-            last_cam_img_torch = cam_img_torch
-        acid_gain = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.5, val_default=0.05)
-            
-        image_displacement_array = ((cam_img_torch - last_cam_img_torch)/255)**2
-        
-        if do_local_accumulate_acid:
-            image_displacement_array = (1-image_displacement_array*100)
-            image_displacement_array = image_displacement_array.clamp(0)
-            if image_displacement_array_accumulated == None:
-                image_displacement_array_accumulated = torch.zeros_like(image_displacement_array)           
-            image_displacement_array_accumulated[image_displacement_array>=0.5] += 2e-2
-            image_displacement_array_accumulated[image_displacement_array<0.5] -= 2e-1
-            image_displacement_array_accumulated = image_displacement_array_accumulated.clamp(0)
-            
-            image_displacement_array_accumulated = image_displacement_array_accumulated.mean(2, keepdims=True)
-            image_displacement_array_accumulated = image_displacement_array_accumulated.repeat([1,1,3])
-            
-            image_displacement_array_accumulated -= image_displacement_array_accumulated.min()
-            image_displacement_array_accumulated /= image_displacement_array_accumulated.max()
-            
-            if invert_accumulate_acid:
-                acid_array = 1-image_displacement_array_accumulated
-                acid_array[acid_array<0.05]=0.05
-                acid_array *= acid_gain                
-            else:
-                acid_array = (image_displacement_array_accumulated)*acid_gain
+    acid_strength = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.8, val_default=0.11)
 
-        
-        else:
-            image_displacement = image_displacement_array.mean()
-            image_displacement = (1-image_displacement*100)
-            if image_displacement < 0:
-                image_displacement = 0
-                
-            if image_displacement >= 0.5:
-                image_displacement_accumulated += 2e-2
-            else:
-                image_displacement_accumulated -= 4e-1
-            # if image_displacement >= 0.5:
-            #     image_displacement_accumulated += acid_persistence
-            # else:
-            #     image_displacement_accumulated -= (1-acid_persistence)
-                
-            if image_displacement_accumulated < 0:
-                image_displacement_accumulated = 0
-            
-            if invert_accumulate_acid:
-                acid_strength = max(0.1, 1 - image_displacement_accumulated)
-            else:
-                acid_strength = 0.1 + image_displacement_accumulated * 1
-            acid_strength *= acid_gain
-            acid_strength = min(1, acid_strength)
-        last_cam_img_torch = cam_img_torch.clone()
-    else:
-        acid_strength = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.8, val_default=0.11)
-        
-    F2 = meta_input.get(akai_midimix="F2", val_min=0, val_max=10.0, val_default=0)
-    if F2 > 0:
-        acid_strength = (np.sin(F2*float(time.time())) + 1)/2
-        
-    
     # just a test
     # cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     if do_accumulate_acid and do_local_accumulate_acid:
         cam_img_torch = (1.-acid_array)*cam_img_torch + acid_array*torch_last_diffusion_image
     else:
         cam_img_torch = (1.-acid_strength)*cam_img_torch + acid_strength*torch_last_diffusion_image
-    # if meta_input.get(akai_midimix='E4', button_mode='pressed_once'):
-    #     xxx
     cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
-
-    color_matching = meta_input.get(akai_lpd8="G1", val_min=0, val_max=1, val_default=0.0)
-    if color_matching > 0.01:       
-        cam_img_torch, _ = multi_match_gpu([cam_img_torch, torch_last_diffusion_image], weights=[1-color_matching, color_matching], clip_max='auto', gpu=0,  is_input_tensor=True)
-
     cam_img = cam_img_torch.cpu().numpy()
         
-    if use_modulated_unet:
-        H2 = meta_input.get(akai_midimix="H2", val_min=0, val_max=10, val_default=0)
-        modulations['b0_samp'] = torch.tensor(H2, device=latents.device)
-        modulations['e2_samp'] = torch.tensor(H2, device=latents.device)
-        
-        H1 = meta_input.get(akai_midimix="H1", akai_lpd8="F1", val_min=1, val_max=10, val_default=2)
-        modulations['b0_emb'] = torch.tensor(H1, device=latents.device)
-        modulations['e2_emb'] = torch.tensor(H1, device=latents.device)
-        
-        fract_mod = meta_input.get(akai_midimix="G0", val_default=0, val_max=2, val_min=0)
-        if fract_mod > 1:
-            modulations['d*_extra_embeds'] = prompt_embeds_decoder    
-        else:
-            modulations['d*_extra_embeds'] = prompt_embeds
-            
-        modulations['modulations_noise'] = modulations_noise
         
     if use_modulated_unet:
         cross_attention_kwargs ={}
@@ -619,42 +508,82 @@ while True:
     else:
         cross_attention_kwargs = None
     
+    nmb_diffusion_frames_max = int(meta_input.get(akai_lpd8="H1", val_min=1, val_max=5))
+    nmb_diffusion_frames_ramp = int(meta_input.get(akai_lpd8="G1", val_min=1, val_max=10))
+    p_camera = meta_input.get(akai_lpd8="H0", val_min=0.9, val_max=1.0)
+    
     use_debug_overlay = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
+
+    image_diffusion = pipe(image=Image.fromarray(cam_img.astype(np.uint8)), 
+                  latents=latents, num_inference_steps=num_inference_steps, strength=strength, 
+                  guidance_scale=guidance_scale, prompt_embeds=prompt_embeds, 
+                  negative_prompt_embeds=negative_prompt_embeds, 
+                  pooled_prompt_embeds=pooled_prompt_embeds, 
+                  negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img, 
+                  modulations=modulations,cross_attention_kwargs=cross_attention_kwargs).images[0]
+    
+
+    
+    if not diffusion_mode_active:
+        if np.random.rand() > p_camera:
+            diffusion_mode_active = True
+            nmb_diffusion_frames_shown = 0
+         
     if use_debug_overlay:
-        image = cam_img.astype(np.uint8)
-        if do_local_accumulate_acid:
-            try:
-                image = (image_displacement_array_accumulated*255).cpu().numpy().astype(np.uint8)
-            except Exception as e:
-                print(f"bad error! {e}")
+        diffusion_mode_active = True    
+    
+    thresh_depth = meta_input.get(akai_lpd8="G0", val_min=500, val_max=1000, val_default=650)
+    
+    if diffusion_mode_active:
+        if depth_estimator.last_depth_map is not None:
+            mask = depth_estimator.last_depth_map > thresh_depth
+            mask = mask.astype(np.float32)
+            mask = cv2.GaussianBlur(mask, (21, 21), 0)
+            mask = mask / mask.max()
+            image = np.zeros_like(image_diffusion)
+            
+            if ramping_up:
+                nmb_active_ramp += 1
+            else:
+                nmb_active_ramp -= 1
+            
+            # print(f"nmb_active_ramp {nmb_active_ramp}")
+            if nmb_active_ramp >= nmb_diffusion_frames_ramp:
+                ramping_up = False
+            elif nmb_active_ramp <= 0:
+                ramping_up = True
+                diffusion_mode_active = False
+                
+            fract_ramp = nmb_active_ramp / nmb_diffusion_frames_ramp
+            image_diffusion_ramped = np.asarray(image_diffusion).astype(np.float32)
+            image_diffusion_ramped *= fract_ramp
+            image_diffusion_ramped += (1-fract_ramp) * cam_img
+            
+            image = mask[..., np.newaxis] * image_diffusion_ramped + (1 - mask[..., np.newaxis]) * cam_img_orig
+
+    
+            
+        nmb_diffusion_frames_shown += 1
     else:
-        image = pipe(image=Image.fromarray(cam_img.astype(np.uint8)), 
-                      latents=latents, num_inference_steps=num_inference_steps, strength=strength, 
-                      guidance_scale=guidance_scale, prompt_embeds=prompt_embeds, 
-                      negative_prompt_embeds=negative_prompt_embeds, 
-                      pooled_prompt_embeds=pooled_prompt_embeds, 
-                      negative_pooled_prompt_embeds=negative_pooled_prompt_embeds, noise_img2img=noise_img2img, 
-                      modulations=modulations,cross_attention_kwargs=cross_attention_kwargs).images[0]
+        image = cam_img_orig
         
+    
+    # if diffusion_mode_active and nmb_diffusion_frames_shown >= nmb_diffusion_frames_max:
+    #     diffusion_mode_active = False
+    
+
+
+        # image = np.asarray(image).astype(np.float32)
+        # image *= 0.5
+        # image += 0.5*cam_img
+        # image = image.astype(np.uint8)
+    
     time_difference = time.time() - last_render_timestamp
     last_render_timestamp = time.time()
     
-    lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
-    try:
-        torch_last_diffusion_image = torchvision.transforms.functional.pil_to_tensor(image).to(latents.device, dtype=torch.float).permute(1,2,0)
-    except:
-        torch_last_diffusion_image = torch.from_numpy(image).to(latents.device, dtype=torch.float)
-    # last_diffusion_image = np.array(image, dtype=np.float32)
+    last_diffusion_image = np.array(image, dtype=np.float32)
     
-    do_antishift = meta_input.get(akai_midimix="A4", akai_lpd8="D0", button_mode="toggle")
-    x_shift = int(meta_input.get(akai_midimix="B0", akai_lpd8="H0", val_default=0, val_max=10, val_min=-10))
-    y_shift = int(meta_input.get(akai_midimix="B1", akai_lpd8="H1", val_default=0, val_max=10, val_min=-10))
-    if do_antishift:
-        # last_diffusion_image = np.roll(last_diffusion_image,int(y_shift),axis=0)
-        # last_diffusion_image = np.roll(last_diffusion_image,int(x_shift),axis=1)
-        torch_last_diffusion_image = torch.roll(torch_last_diffusion_image, (y_shift, x_shift), (0,1))
-        # last_diffusion_image = zoom_image(last_diffusion_image, 1.5)
-    
+
     # Render the image
     renderer.render(image)
     
@@ -663,6 +592,7 @@ while True:
     fract += d_fract_embed
     fract = np.clip(fract, 0, 1)
     
+
 
         
         

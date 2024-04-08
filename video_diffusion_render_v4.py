@@ -111,8 +111,8 @@ class PromptManager: #change this to be more streamlined with the gpu device
 
 # Diffusion Pipe
 
-gpu = "cuda:1"
-device = torch.device("cuda:1")
+gpu = "cuda"
+device = torch.device("cuda")
 pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_device=gpu, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
 pipe.to(gpu)
 pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device=gpu, torch_dtype=torch.float16, local_files_only=True)
@@ -136,7 +136,7 @@ if do_compile:
 if use_modulated_unet:
     pipe.unet.forward = lambda *args, **kwargs: forward_modulated(pipe.unet, *args, **kwargs)
 # Promptblender
-blender = PromptBlender(pipe,1) # cuda device index 
+blender = PromptBlender(pipe, 0) # cuda device index 
 # Renderer
 renderer = lt.Renderer(width=sz_renderwin[1], height=sz_renderwin[0])
 
@@ -171,10 +171,10 @@ prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_deco
 #%%
 
 
-video_list = ['EXTRA_SHOTS']
+video_list = ['brawl1']
 
 # Promptmanager
-prompt_list = ['Astronauts, deep space, 4K, photorealistic', 'Cowboys, 4K, photorealistic', 'Miami 70s Fashion, Old TV show aesthetic', 'Funky Disco, analogue video aesthetic', 'Fitness Class, 4K, photorealistic', 'Indigenous people, black and white old video, documentary', 'Bull fighters, horse riding, 4K, photorealistic','People made of poop', 'Zombie horror scene, blood, 4K, bollywood']
+prompt_list = ['twin peaks, surrealist cinematography, high contrast, 4K, high resolution images of the human bodys']
 promptmanager = PromptManager(False, prompt_list)
 
 
