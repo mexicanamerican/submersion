@@ -218,48 +218,28 @@ while True:
 
     # human_mask = human_seg.get_mask(np.asarray(cam_img))
     # human_mask = human_mask.astype(np.float32)
-    
     # mask = human_mask
-
 
     guidance_scale = 0.0
     t0 = time.time()
     
     generator = torch.Generator(device="cuda").manual_seed(0)    
     image_diffusion = pipe(image=cam_img_cropped, generator=generator, mask_image=mask, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
-    
-    # Re-insert image_diffusion into cam_img at the cropped position
-    cam_img.paste(image_diffusion, (cam_crop_x, cam_crop_y))
-    
-    
     dt = time.time() - t0
     fps = 1/dt
-    # print(f"\rCurrent fps: {fps:.1f}", end="")
-    
-    # stitch_cam = meta_input.get(akai_lpd8="D0", button_mode="toggle")
-    
-    show_cam = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
-    # use_mask = True
-    # 
 
-    
-    # if use_mask:
+    # We additionally blend in the original image with the diffusion image to avoid any edges
+    kernel_size = 55
+    mask_smoothed = cv2.GaussianBlur(np.array(mask), (kernel_size, kernel_size), 0)
+    mask_smoothed = mask_smoothed/255
+    image_diffusion_blended = blend_images(image_diffusion, cam_img_cropped, mask_smoothed)
+
+    show_cam = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
+    image_show = cam_img
+    if not show_cam:
+        # Re-insert image_diffusion into cam_img at the cropped position
+        cam_img.paste(image_diffusion_blended, (cam_crop_x, cam_crop_y))
         
-    #     # fract_ramp = meta_input.get(akai_midimix="H5", val_default=0, val_min=0, val_max=1.0)
-    #     # fract_ramp = 1 - np.clip(different_pixels_count/1000, 0, 1)
-        
-    #     image_diffusion_ramped = np.asarray(image_diffusion).astype(np.float32)
-    #     image_diffusion_ramped *= fract_ramp
-    #     image_diffusion_ramped += (1-fract_ramp) * np.asarray(cam_img)
-                
-    #     image = np.zeros_like(image_diffusion)
-    #     image = mask_last[..., np.newaxis] * image_diffusion_ramped + (1 - mask_last[..., np.newaxis]) * cam_img_last
-    #     image_diffusion = Image.fromarray(image.astype(np.uint8))
-    
-    
-    if show_cam:
-        image_show = pad_image_to_width(cam_img_orig, image_diffusion.size[0]*2)
-    else:
         image_show = cam_img #pad_image_to_width(cam_img, image_diffusion.size[0]*2)
         
     renderer.render(image_show)
@@ -267,4 +247,5 @@ while True:
     if do_record_vid and currently_recording_vid:
         movie.write_frame(np.asarray(image_show))
     
+
 
