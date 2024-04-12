@@ -82,10 +82,10 @@ def center_crop_and_resize(img, size=(512, 512)):
         print(f"An error occurred: {e}")
 
 
-def process_cam_img(cam_img):
+def process_cam_img(cam_img, size=(512, 512)):
     cam_img = np.flip(cam_img, axis=1)
     cam_img = Image.fromarray(np.uint8(cam_img))
-    cam_img = center_crop_and_resize(cam_img)
+    cam_img = center_crop_and_resize(cam_img, size)
     return cam_img
     
 
@@ -94,8 +94,26 @@ def blend_images(img1, img2, weight):
     arr1 = np.array(img1, dtype=np.float64)
     arr2 = np.array(img2, dtype=np.float64)
 
+    if isinstance(weight, Image.Image):
+        weight = np.array(weight)
+
+   
+    if isinstance(weight, np.ndarray):
+        assert np.max(weight) <= 1.0, "Maximum weight has to be 1.0"
+        assert np.min(weight) >= 0.0, "Minimum weight has to be 0.0"
+        # Ensure the mask is broadcastable to the image arrays
+        weight = np.expand_dims(weight, axis=-1)
+        # Ensure the weight array has the same number of channels as the images
+        weight = np.repeat(weight, arr1.shape[-1], axis=-1)
+        blended_arr = weight * arr1 + (1 - weight) * arr2
+    else:
+        assert 0 <= weight <= 1, "Weight must be between 0 and 1 inclusive."
+        # Blend images with a single weight value
+        blended_arr = weight * arr1 + (1 - weight) * arr2
+
     # Blend images
-    blended_arr = np.clip(arr1 + weight * arr2, 0, 255)
+    blended_arr = weight * arr1 + (1-weight) * arr2
+    blended_arr = np.clip(blended_arr, 0, 255)
 
     # Convert back to image
     return Image.fromarray(blended_arr.astype(np.uint8))
