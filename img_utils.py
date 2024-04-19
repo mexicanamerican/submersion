@@ -111,8 +111,6 @@ def blend_images(img1, img2, weight):
         # Blend images with a single weight value
         blended_arr = weight * arr1 + (1 - weight) * arr2
 
-    # Blend images
-    blended_arr = weight * arr1 + (1-weight) * arr2
     blended_arr = np.clip(blended_arr, 0, 255)
 
     # Convert back to image
