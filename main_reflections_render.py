@@ -29,7 +29,7 @@ from img_utils import center_crop_and_resize
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
-
+import matplotlib.pyplot as plt
 from diffusers import AutoPipelineForInpainting
 
 
@@ -120,8 +120,8 @@ blur = MedianBlur((3, 3))
 pipe = AutoPipelineForInpainting.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16")
     
 pipe = pipe.to("cuda")
-# pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
-# pipe.vae = pipe.vae.cuda()
+pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
+pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
 if compile_with_sfast:
@@ -155,12 +155,17 @@ speech_detector = lt.Speech2Text()
 meta_input = lt.MetaInput()
 
 fps = 0
-
+hsize_x = int(size_diff_img[1] // 2)
+hsize_y = int(size_diff_img[0] // 2)
 currently_recording_vid = False
 cam_img_first = None
 blob_image = None
 
+eye_coords_X = 0
+eye_coords_Y = 0
+
 while True:
+    t0 = time.time()
     torch.manual_seed(420)
     num_inference_steps = int(meta_input.get(akai_midimix="D0", akai_lpd8="H1", val_min=2, val_max=5, val_default=2))
     
@@ -196,56 +201,80 @@ while True:
     cam_img = np.flip(cam_img, axis=1)
     cam_img = np.uint8(cam_img)
     
-    # Crop an image out that is the size of what we put into diffusion
-    cam_crop_x = int(meta_input.get(akai_midimix="C1", val_min=0, val_max=shape_cam[1]-size_diff_img[1]))
-    cam_crop_y = int(meta_input.get(akai_midimix="C2", val_min=0, val_max=shape_cam[0]-size_diff_img[0]))
-    cam_img_cropped = cam_img[cam_crop_y:cam_crop_y+size_diff_img[0], cam_crop_x:cam_crop_x+size_diff_img[1], :]
+    # Define the center for cropping based on diffusion size
+    center_diff_x = np.clip(eye_coords_X, hsize_x, shape_cam[1]-hsize_x)
+    center_diff_y = np.clip(eye_coords_Y, hsize_y, shape_cam[0]-hsize_y)
+    # center_diff_x = int(meta_input.get(akai_midimix="C1", val_min=hsize_x, val_max=shape_cam[1]-hsize_x)) 
+    # center_diff_y = int(meta_input.get(akai_midimix="C2", val_min=hsize_y, val_max=shape_cam[0]-hsize_y)) 
+    
+    cam_img_cropped = cam_img[center_diff_y-hsize_y:center_diff_y+hsize_y, center_diff_x-hsize_x:center_diff_x+hsize_x, :]
+    
     cam_img = Image.fromarray(cam_img)
-    cam_img_cropped = Image.fromarray(cam_img_cropped)
     
-    # Within this image we make a square mask
-    mask = np.zeros(size_diff_img, dtype=np.uint8)
-    size_inlet = int(meta_input.get(akai_midimix="C0", val_min=50, val_max=450))
+    # only apply human mask in   cam_img_cropped  
+    human_mask = human_seg.get_mask(np.asarray(cam_img_cropped))
     
-    # Calculate the center of the mask
-    center_y, center_x = [dim // 2 for dim in mask.shape]
-    # Calculate the top left corner of the square
-    y_inlet = center_y - size_inlet // 2
-    x_inlet = center_x - size_inlet // 2
-    # Create the square in the center of the mask
-    mask[y_inlet:y_inlet+size_inlet, x_inlet:x_inlet+size_inlet] = 255
-    mask = Image.fromarray(mask)
-
-    # human_mask = human_seg.get_mask(np.asarray(cam_img))
-    # human_mask = human_mask.astype(np.float32)
-    # mask = human_mask
+    # # apply a human mask within the diffused area
+    # downscale_factor = 4
+    # cam_img_downscaled = cam_img.resize((shape_cam[1] // downscale_factor, shape_cam[0] // downscale_factor))
+    # human_mask = human_seg.get_mask(np.asarray(cam_img_downscaled))
+    # human_mask = Image.fromarray(human_mask).resize((shape_cam[1], shape_cam[0]), Image.NEAREST)
+    # human_mask_cropped = np.asarray(human_mask)[center_diff_y-hsize_y:center_diff_y+hsize_y, center_diff_x-hsize_x:center_diff_x+hsize_x]
+    
+    # erosion_px = int(meta_input.get(akai_midimix="C0", val_min=1, val_max=50))
+    # kernel = np.ones((erosion_px, erosion_px), np.uint8)
+    # human_mask_cropped_eroded = cv2.erode(human_mask_cropped, kernel, iterations=1)
+    # human_mask_cropped_eroded = human_mask_cropped.astype(np.float32)
 
     guidance_scale = 0.0
-    t0 = time.time()
-    
-    generator = torch.Generator(device="cuda").manual_seed(0)    
-    image_diffusion = pipe(image=cam_img_cropped, generator=generator, mask_image=mask, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
+    generator = torch.Generator(device="cuda").manual_seed(0)   
+    cam_img_cropped = Image.fromarray(cam_img_cropped)
+    image_diffusion = pipe(image=cam_img_cropped, mask_image=human_mask, generator=generator, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps, prompt_embeds=prompt_embeds, negative_prompt_embeds=negative_prompt_embeds, pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     dt = time.time() - t0
     fps = 1/dt
-
-    # We additionally blend in the original image with the diffusion image to avoid any edges
-    kernel_size = 55
-    mask_smoothed = cv2.GaussianBlur(np.array(mask), (kernel_size, kernel_size), 0)
-    mask_smoothed = mask_smoothed/255
-    image_diffusion_blended = blend_images(image_diffusion, cam_img_cropped, mask_smoothed)
+    
+    # print(fps)
+    # # Apply a fast Gaussian smoothing on the mask using cv2
+    # mask_np = np.array(mask)
+    # mask_smoothed = cv2.GaussianBlur(mask_np, (55, 55), 0)
+    # mask = Image.fromarray(mask_smoothed)
 
     show_cam = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
-    image_show = cam_img
-    if not show_cam:
+    show_segmask = meta_input.get(akai_midimix="H4", akai_lpd8="D1", button_mode="toggle")
+    
+    # decide if current eye coordinates within human mask
+    eye_coords_X_crop = eye_coords_X - center_diff_x
+    eye_coords_Y_crop = eye_coords_Y - center_diff_y
+    
+    if show_cam:
+        image_show = cam_img
+    elif show_segmask:
+        image_show = np.asarray(cam_img).copy()
+        # image_show[:,:,0] = np.array(human_mask) * 255
+    else:
         # Re-insert image_diffusion into cam_img at the cropped position
-        cam_img.paste(image_diffusion_blended, (cam_crop_x, cam_crop_y))
         
-        image_show = cam_img #pad_image_to_width(cam_img, image_diffusion.size[0]*2)
+        # image_diffusion_mixed = np.where(human_mask[:, :, None], image_diffusion_np, cam_img_cropped_np)
         
-    renderer.render(image_show)
+        human_mask = human_mask.astype(np.float32)
+        human_mask = cv2.GaussianBlur(human_mask, (55, 55), 0)
+        if human_mask.max() > 0:
+            human_mask = human_mask/human_mask.max()
+        image_diffusion_mixed = blend_images(np.array(image_diffusion), cam_img_cropped, human_mask)
+        
+        # image_diffusion_mixed = Image.fromarray(image_diffusion_mixed)
+
+        cam_img.paste(image_diffusion_mixed, (center_diff_x-hsize_x, center_diff_y-hsize_y))
+        
+        image_show = cam_img
+        
+    peripheralEvent = renderer.render(image_show)
+    
+    if peripheralEvent.mouse_posX !=0 and peripheralEvent.mouse_posY != 0:
+        eye_coords_X = peripheralEvent.mouse_posX
+        eye_coords_Y = peripheralEvent.mouse_posY
     
     if do_record_vid and currently_recording_vid:
         movie.write_frame(np.asarray(image_show))
     
-
 
