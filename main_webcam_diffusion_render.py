@@ -66,24 +66,30 @@ torch.set_grad_enabled(False)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False 
 
-<<<<<<< HEAD
+
 import matplotlib.pyplot as plt
-from image_processing import multi_match_gpu
-=======
+# from image_processing import multi_match_gpu
+import cv2
 # key keys: H3 ->  B3/A3 -> E0 (noise) -> C0 (acid) -> A4 (B0+B1)
->>>>>>> b05dcdf9a2d4da0705143d4e41c7138a572e6d42
+
 #%% VARS
+
+use_square = True
 # shape_cam=(600,800) 
-shape_cam=(300,400) 
-do_compile = True
+shape_cam=(300,400)
+if use_square: 
+    shape_cam=(360,360) 
+do_compile = False
 use_community_prompts = False
 
 sz_renderwin = (int(512*2.09), int(512*3.85))
+if use_square:
+    sz_renderwin = (int(512*3), int(512*3))
 # sz_renderwin = (512*2, int(512*2*16/9))
 resolution_factor = 8
 base_w = 20
 base_h = 15
-
+# canvas = torch.zeros(1024, 1024, 3])
 
 resolution_factor = 8 # native is 4
 base_w = 16
@@ -143,6 +149,39 @@ class PromptManager:
         with open(self.fp_save, "a", encoding="utf-8") as file:
             file.write(prompt + "\n")
             
+class MovieReaderCustom():
+    r"""
+    Class to read in a movie.
+    """
+
+    def __init__(self, fp_movie):
+        self.load_movie(fp_movie)
+
+    def load_movie(self, fp_movie):
+        self.video_player_object = cv2.VideoCapture(fp_movie)
+        self.nmb_frames = int(self.video_player_object.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.fps_movie = int(30)
+        self.shape = [shape_cam[0], shape_cam[1], 3]
+        self.shape_is_set = False        
+
+    def get_next_frame(self, speed=2):
+        success = False
+        for it in range(speed):
+            success, image = self.video_player_object.read()
+            
+        if success:
+            if not self.shape_is_set:
+                self.shape_is_set = True
+                self.shape = image.shape
+            return image
+        else:
+            print('MovieReaderCustom: move cycle finished, resetting to first frame')
+            self.video_player_object.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            return np.random.randint(0,20,self.shape).astype(np.uint8)
+
+
+
+           
 import torch.nn.functional as F
 
 def _compute_zero_padding(kernel_size: Tuple[int, int]) -> Tuple[int, int]:
@@ -151,6 +190,7 @@ def _compute_zero_padding(kernel_size: Tuple[int, int]) -> Tuple[int, int]:
     return computed[0], computed[1]
 
 
+#%% These should live in lunar tools
 def median_blur(input: torch.Tensor,
                 kernel_size: Tuple[int, int]) -> torch.Tensor:
     r"""Blurs an image using the median filter.
@@ -258,10 +298,83 @@ def zoom_image_torch(input_tensor, zoom_factor):
 
 def ten2img(ten):
     return ten.cpu().numpy().astype(np.uint8)
-import matplotlib.pyplot as plt
+
+def multi_match_gpu(list_images, weights=None, simple=False, clip_max='auto', gpu=0,  is_input_tensor=False):
+    """
+    Match colors of images according to weights.
+    """
+    from scipy import linalg
+    if is_input_tensor:
+        list_images_gpu = [img.clone() for img in list_images]
+    else:
+        list_images_gpu = [torch.from_numpy(img.copy()).float().cuda(gpu) for img in list_images]
+    
+    if clip_max == 'auto':
+        clip_max = 255 if list_images[0].max() > 16 else 1  
+    
+    if weights is None:
+        weights = [1]*len(list_images_gpu)
+    weights = np.array(weights, dtype=np.float32)/sum(weights) 
+    assert len(weights) == len(list_images_gpu)
+    # try:
+    assert simple == False    
+    def cov_colors(img):
+        a, b, c = img.size()
+        img_reshaped = img.view(a*b,c)
+        mu = torch.mean(img_reshaped, 0, keepdim=True)
+        img_reshaped -= mu
+        cov = torch.mm(img_reshaped.t(), img_reshaped) / img_reshaped.shape[0]
+        return cov, mu
+    
+    covs = np.zeros((len(list_images_gpu),3,3), dtype=np.float32)
+    mus = torch.zeros((len(list_images_gpu),3)).float().cuda(gpu)
+    mu_target = torch.zeros((1,1,3)).float().cuda(gpu)
+    #cov_target = np.zeros((3,3), dtype=np.float32)
+    for i, img in enumerate(list_images_gpu):
+        cov, mu = cov_colors(img)
+        mus[i,:] = mu
+        covs[i,:,:]= cov.cpu().numpy()
+        mu_target += mu * weights[i]
+            
+    cov_target = np.sum(weights.reshape(-1,1,1)*covs, 0)
+    covs += np.eye(3, dtype=np.float32)*1
+    
+    # inversion_fail = False
+    try:
+        sqrtK = linalg.sqrtm(cov_target)
+        assert np.isnan(sqrtK.mean()) == False
+    except Exception as e:
+        print(e)
+        # inversion_fail = True
+        sqrtK = linalg.sqrtm(cov_target + np.random.rand(3,3)*0.01)
+    list_images_new = []
+    for i, img in enumerate(list_images_gpu):
+        
+        Ms = np.real(np.matmul(sqrtK, linalg.inv(linalg.sqrtm(covs[i]))))
+        Ms = torch.from_numpy(Ms).float().cuda(gpu)
+        #img_new = img - mus[i]
+        img_new = torch.mm(img.view([img.shape[0]*img.shape[1],3]), Ms.t())
+        img_new = img_new.view([img.shape[0],img.shape[1],3]) + mu_target
+        
+        img_new = torch.clamp(img_new, 0, clip_max)
+
+        assert torch.isnan(img_new).max().item() == False
+        if is_input_tensor:
+            list_images_new.append(img_new)
+        else:
+            list_images_new.append(img_new.cpu().numpy())
+    return list_images_new
 #%% Inits
 cam = lt.WebCam(cam_id=-1, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+
+
+
+# # load videos
+# dn_movie = '/home/lugo/Desktop/ar_teaser'
+# fp_movie = os.path.join(dn_movie, f'{person_name}.mp4')
+# if os.path.isfile(fp_movie):
+#     movie_reader = MovieReaderCustom(fp_movie)
 
 # Diffusion Pipe
 pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
@@ -294,6 +407,8 @@ blender = PromptBlender(pipe)
 promptmanager = PromptManager(use_community_prompts)
 prompt = promptmanager.get_new_prompt()
 
+prompt = 'Bizarre creature from Hieronymus Bosch painting "A Garden of Earthly Delights" on a schizophrenic ayahuasca trip'
+
 fract = 0
 blender.set_prompt1(prompt)
 blender.set_prompt2(prompt)
@@ -307,6 +422,15 @@ renderer = lt.Renderer(width=sz_renderwin[1], height=sz_renderwin[0])
 
 cam_img = cam.get_img()
 cam_img = np.flip(cam_img, axis=1)
+
+if use_square:
+    cam_img = cam_img[:, 140:500, :]
+    
+
+
+# fp_movie_out = f'./movies_out/{person_name}.mp4'
+# ms = lt.MovieSaver(fp_movie_out, fps=11)
+
 
 
 noise_resolution_w = base_w*resolution_factor
@@ -322,7 +446,6 @@ cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution
 # aug_overlay = cv2.imread(fp_aug)[:,:,::-1].copy()
 # aug_overlay = cv2.resize(aug_overlay.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
 
-# last_diffusion_image = np.uint8(cam_img)
 last_cam_img_torch = None
 
 meta_input = lt.MetaInput()
@@ -372,6 +495,14 @@ prompt_embeds_decoder, negative_prompt_embeds_decoder, pooled_prompt_embeds_deco
 last_render_timestamp = time.time()
 fract = 0
 use_modulated_unet = True
+
+use_pose = False
+
+movie_recording_started = 0
+
+if use_pose:
+    client = lt.ZMQPairEndpoint(is_server=False, ip='127.0.0.1', port='5556')
+
 while True:
     do_fix_seed = not meta_input.get(akai_midimix='F3', button_mode='toggle')
     if do_fix_seed:
@@ -407,6 +538,7 @@ while True:
         try:
             prompt_prev = prompt
             prompt = promptmanager.get_new_prompt()
+
             print(f"New prompt: {prompt}")
             stop_recording = False
             fract = 0
@@ -443,15 +575,34 @@ while True:
     #     with open(fp, 'w') as file:
     #         yaml.dump(parameters, file)
         # akai_midimix.yaml_dump(path=path_midi_dump, prompt=prompt)
-    
-    cam_img = cam.get_img()
+        
+    use_image2image = meta_input.get(akai_midimix="I2", button_mode="toggle")
+    if use_image2image:
+        speed_movie = 1
+        cam_img = movie_reader.get_next_frame(speed=int(speed_movie))
+        cam_img = cv2.resize(cam_img, (640, 360))
+        cam_img = cam_img[:,:,::-1]
+        # print(f'using the video {fp_movie}')
+    else:
+        cam_img = cam.get_img()
+        
+
+        
     cam_img = np.flip(cam_img, axis=1)
+    if use_square:
+        cam_img = cam_img[:, 140:500, :]
+    if use_pose:
+        client.send_img(cam_img)
+    
     
     # mask the body
     apply_body_mask = meta_input.get(akai_midimix="E3", button_mode="toggle")
     if apply_body_mask:
-        mask = human_seg.get_mask(cam_img)
-        cam_img *= np.expand_dims(mask, axis=2)
+        mask_strength = meta_input.get(akai_midimix="E2", val_min=0.0, val_max=1.0, val_default=1)
+        mask = np.expand_dims(human_seg.get_mask(cam_img), axis=2)
+        cam_img_masked = cam_img * mask
+        cam_img = (1-mask_strength)*cam_img + mask_strength * cam_img_masked
+        cam_img = cam_img.astype(np.uint8)
     
     # test resolution
     cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution_h))
@@ -462,42 +613,57 @@ while True:
     #     mask_aug = aug_overlay[:,:,0] != 0
     #     cam_img[mask_aug] = aug_overlay[mask_aug]
     
-    strength = meta_input.get(akai_midimix="C1", val_min=0.5, val_max=1.0, val_default=0.5)
-    num_inference_steps = 2 #int(meta_input.get(akai_midimix="C2", val_min=2, val_max=10, val_default=2))
-    guidance_scale = meta_input.get(akai_midimix="C2", val_min=0, val_max=1, val_default=0.5)
-    # guidance_scale = 1
+    strength = meta_input.get(akai_midimix="D2", val_min=0.5, val_max=1.0, val_default=0.5)
+    # strength = 0.5
+    # num_inference_steps = int(meta_input.get(akai_midimix="C1", val_min=2, val_max=10, val_default=2))
+    # guidance_scale = meta_input.get(akai_midimix="C1", val_min=0.001, val_max=1., val_default=0.5)
+    num_inference_steps = meta_input.get(akai_midimix="D1", val_min=2, val_max=6.1, val_default=2)
+    num_inference_steps = int(num_inference_steps)
+    # print(f'num_inference_steps: {num_inference_steps}')
+    guidance_scale = 0.5
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
     
-    cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
+    disable_blur = meta_input.get(akai_midimix="F4", button_mode="toggle")
+    if not disable_blur:
+        cam_img_torch = blur(cam_img_torch.permute([2,0,1])[None])[0].permute([1,2,0])
+    
+    if use_pose:
+        client_msgs = client.get_messages()
+        if client_msgs:
+            dict_coco_keypoints = {0:'nose', 1:'left_eye', 2:'right_eye', 3:'left_ear', 4:'right_ear', 5:'left_shoulder', 6:'right_shoulder', 7:'left_elbow', 8:'right_elbow', 9:'left_wrist', 10:'right_wrist', 11:'left_hip', 12:'right_hip', 13:'left_knee', 14:'right_knee', 15:'left_ankle', 16:'right_ankle'}
+            dict_keypoint_names = {v: k for k, v in dict_coco_keypoints.items()}
+            array_keypoints = client_msgs[0]['keypoints'][0]
+            dist_shoulders = array_keypoints[dict_keypoint_names['left_shoulder']][0] - array_keypoints[dict_keypoint_names['right_shoulder']][0]
+            dist_wrists = array_keypoints[dict_keypoint_names['left_wrist']][0] - array_keypoints[dict_keypoint_names['right_wrist']][0]
+            print("Messages received by client:", client_msgs)
+    
     
     # torch_last_diffusion_image = torch.from_numpy(last_diffusion_image).to(cam_img_torch)
     do_zoom = meta_input.get(akai_midimix="H4", akai_lpd8="C0", button_mode="toggle")
     if do_zoom:
-        zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.9, val_max=1.1, val_default=1)
+        if use_pose:
+            try:
+                zoom_factor = 1 + ((dist_wrists - dist_shoulders)/dist_shoulders)/10
+            except:
+                zoom_factor = 1
+            print(f'zoom_factor: {zoom_factor}')
+        else:
+            zoom_factor = meta_input.get(akai_midimix="F0", akai_lpd8="G0", val_min=0.9, val_max=1.1, val_default=1)
         torch_last_diffusion_image = zoom_image_torch(torch_last_diffusion_image, zoom_factor)
     if do_cam_coloring:
         for c in range(3):
-            mask = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1) < 0.8).repeat(1, 1, 3)
-            mask[:,:,c] = 0
-            cam_img_torch[mask] = 255
+            coloring_mask = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1) < 0.8).repeat(1, 1, 3)
+            coloring_mask[:,:,c] = 0
+            cam_img_torch[coloring_mask] = 255
 
 
     if do_add_noise:
         # coef noise
         coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.1, val_default=0.03)
+        latent_noise_sigma = meta_input.get(akai_midimix="E1", akai_lpd8="E2", val_min=0.7, val_max=1.3, val_default=1)
         
         if not do_gray_noise:
-            # t_rand_r = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            # t_rand_g = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            # t_rand_b = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 1, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            
-            # t_rand_r[t_rand_r<0.5] = 0
-            # t_rand_g[t_rand_g<0.5] = 0
-            # t_rand_b[t_rand_b<0.5] = 0
-            # xx
-            # Combine the independent noise for each channel
-            # t_rand = torch.cat((t_rand_r, t_rand_g, t_rand_b), dim=2)
             
             t_rand = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
             t_rand[t_rand < 0.5] = 0
@@ -557,11 +723,7 @@ while True:
                 image_displacement_accumulated += 2e-2
             else:
                 image_displacement_accumulated -= 4e-1
-            # if image_displacement >= 0.5:
-            #     image_displacement_accumulated += acid_persistence
-            # else:
-            #     image_displacement_accumulated -= (1-acid_persistence)
-                
+
             if image_displacement_accumulated < 0:
                 image_displacement_accumulated = 0
             
@@ -575,9 +737,9 @@ while True:
     else:
         acid_strength = meta_input.get(akai_midimix="C0", akai_lpd8="F0", val_min=0, val_max=0.8, val_default=0.11)
         
-    F2 = meta_input.get(akai_midimix="F2", val_min=0, val_max=10.0, val_default=0)
-    if F2 > 0:
-        acid_strength = (np.sin(F2*float(time.time())) + 1)/2
+    acid_freq = meta_input.get(akai_midimix="F2", val_min=0, val_max=10.0, val_default=0)
+    # if acid_freq > 0:
+    #     acid_strength = (np.sin(acid_freq*float(time.time())) + 1)/2
         
     
     # just a test
@@ -589,21 +751,40 @@ while True:
     # if meta_input.get(akai_midimix='E4', button_mode='pressed_once'):
     #     xxx
     cam_img_torch = torch.clamp(cam_img_torch, 0, 255)
+    # paint_decay = 0.999
+    # color_strenght = 1
+    # if apply_body_mask:
+    #     mask_torch = F.interpolate(torch.from_numpy(mask).to(latents.device).float().permute(2,0,1).unsqueeze(0), size=(1024, 1024), mode='bilinear', align_corners=False).squeeze(axis=0).permute(1,2,0)
+    #     if canvas.shape != cam_img_torch.shape:
+    #         canvas = torch.zeros_like(cam_img_torch)
+        
 
-    color_matching = meta_input.get(akai_lpd8="G1", val_min=0, val_max=1, val_default=0.0)
-    if color_matching > 0.01:       
-        cam_img_torch, _ = multi_match_gpu([cam_img_torch, torch_last_diffusion_image], weights=[1-color_matching, color_matching], clip_max='auto', gpu=0,  is_input_tensor=True)
+    color_matching = meta_input.get(akai_lpd8="G1", akai_midimix="C2", val_min=0, val_max=1, val_default=0.0)
+    if color_matching > 0.01:
+        if apply_body_mask:
+            mask_torch = F.interpolate(torch.from_numpy(mask).to(latents.device).float().permute(2,0,1).unsqueeze(0), size=(1024, 1024), mode='bilinear', align_corners=False).squeeze(axis=0).permute(1,2,0)
+            torch_last_diffusion_image_masked = torch_last_diffusion_image*mask_torch
+            torch_last_diffusion_image = (1-mask_strength)*torch_last_diffusion_image + mask_strength * torch_last_diffusion_image_masked
+            cam_img_torch, _ = multi_match_gpu([cam_img_torch, torch_last_diffusion_image], weights=[1-color_matching, color_matching], clip_max='auto', gpu=0,  is_input_tensor=True)
+        else:
+            cam_img_torch, _ = multi_match_gpu([cam_img_torch, torch_last_diffusion_image], weights=[1-color_matching, color_matching], clip_max='auto', gpu=0,  is_input_tensor=True)
 
     cam_img = cam_img_torch.cpu().numpy()
-        
+    
+    # # mask the body
+    # apply_body_mask = meta_input.get(akai_midimix="E3", button_mode="toggle")
+    # if apply_body_mask:
+    #     mask = human_seg.get_mask(cam_img)
+    #     cam_img *= np.expand_dims(mask, axis=2)    
+    
     if use_modulated_unet:
-        H2 = meta_input.get(akai_midimix="H2", val_min=0, val_max=10, val_default=0)
-        modulations['b0_samp'] = torch.tensor(H2, device=latents.device)
-        modulations['e2_samp'] = torch.tensor(H2, device=latents.device)
+        mod_samp = meta_input.get(akai_midimix="H2", val_min=0, val_max=10, val_default=0)
+        modulations['b0_samp'] = torch.tensor(mod_samp, device=latents.device)
+        modulations['e2_samp'] = torch.tensor(mod_samp, device=latents.device)
         
-        H1 = meta_input.get(akai_midimix="H1", akai_lpd8="F1", val_min=1, val_max=10, val_default=2)
-        modulations['b0_emb'] = torch.tensor(H1, device=latents.device)
-        modulations['e2_emb'] = torch.tensor(H1, device=latents.device)
+        mod_emb = meta_input.get(akai_midimix="H1", akai_lpd8="F1", val_min=1, val_max=10, val_default=2)
+        modulations['b0_emb'] = torch.tensor(mod_emb, device=latents.device)
+        modulations['e2_emb'] = torch.tensor(mod_emb, device=latents.device)
         
         fract_mod = meta_input.get(akai_midimix="G0", val_default=0, val_max=2, val_min=0)
         if fract_mod > 1:
@@ -616,6 +797,7 @@ while True:
     if use_modulated_unet:
         cross_attention_kwargs ={}
         cross_attention_kwargs['modulations'] = modulations
+        cross_attention_kwargs['latent_noise_sigma'] = latent_noise_sigma
     else:
         cross_attention_kwargs = None
     
@@ -639,7 +821,8 @@ while True:
     time_difference = time.time() - last_render_timestamp
     last_render_timestamp = time.time()
     
-    lt.dynamic_print(f'fps: {np.round(1/time_difference)}')
+    fps = np.round(1/time_difference)
+    lt.dynamic_print(f'fps: {fps}')
     try:
         torch_last_diffusion_image = torchvision.transforms.functional.pil_to_tensor(image).to(latents.device, dtype=torch.float).permute(1,2,0)
     except:
@@ -650,16 +833,28 @@ while True:
     x_shift = int(meta_input.get(akai_midimix="B0", akai_lpd8="H0", val_default=0, val_max=10, val_min=-10))
     y_shift = int(meta_input.get(akai_midimix="B1", akai_lpd8="H1", val_default=0, val_max=10, val_min=-10))
     if do_antishift:
-        # last_diffusion_image = np.roll(last_diffusion_image,int(y_shift),axis=0)
-        # last_diffusion_image = np.roll(last_diffusion_image,int(x_shift),axis=1)
         torch_last_diffusion_image = torch.roll(torch_last_diffusion_image, (y_shift, x_shift), (0,1))
-        # last_diffusion_image = zoom_image(last_diffusion_image, 1.5)
     
     # Render the image
     renderer.render(image)
     
+
+    do_record_movie = meta_input.get(akai_midimix="I1", button_mode="toggle")
+    if do_record_movie:
+        if not movie_recording_started:
+            movie_recording_started = 1
+            time_stamp = str(time.time())
+            os.makedirs('./movies_out', exist_ok=True)
+            fp_movie_out = f'./movies_out/movie_{time_stamp}.mp4'
+            ms = lt.MovieSaver(fp_movie_out, fps=fps)
+        ms.write_frame(image)
+    else:
+        if movie_recording_started:
+            ms.finalize()
+        movie_recording_started = 0
+    
     # move fract forward
-    d_fract_embed = meta_input.get(akai_midimix="A1", akai_lpd8="E0", val_min=0.0005, val_max=0.05, val_default=0.005)
+    d_fract_embed = meta_input.get(akai_midimix="A1", akai_lpd8="E0", val_min=0.0005, val_max=0.05, val_default=0.05)
     fract += d_fract_embed
     fract = np.clip(fract, 0, 1)
     
