@@ -80,7 +80,7 @@ shape_cam=(300,400)
 if use_square: 
     shape_cam=(360,360) 
 do_compile = False
-use_community_prompts = False
+use_community_prompts = True
 
 sz_renderwin = (int(512*2.09), int(512*3.85))
 if use_square:
@@ -616,11 +616,11 @@ while True:
     strength = meta_input.get(akai_midimix="D2", val_min=0.5, val_max=1.0, val_default=0.5)
     # strength = 0.5
     # num_inference_steps = int(meta_input.get(akai_midimix="C1", val_min=2, val_max=10, val_default=2))
-    # guidance_scale = meta_input.get(akai_midimix="C1", val_min=0.001, val_max=1., val_default=0.5)
-    num_inference_steps = meta_input.get(akai_midimix="D1", val_min=2, val_max=6.1, val_default=2)
-    num_inference_steps = int(num_inference_steps)
-    # print(f'num_inference_steps: {num_inference_steps}')
     guidance_scale = 0.5
+    guidance_scale = meta_input.get(akai_midimix="C1", val_min=0.001, val_max=1., val_default=0.5)
+    # num_inference_steps = meta_input.get(akai_midimix="D1", val_min=2, val_max=6.1, val_default=2)
+    # num_inference_steps = int(num_inference_steps)
+    num_inference_steps = 2
     
     cam_img_torch = torch.from_numpy(cam_img.copy()).to(latents.device).float()
     
@@ -660,17 +660,22 @@ while True:
 
     if do_add_noise:
         # coef noise
-        coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.1, val_default=0.03)
-        latent_noise_sigma = meta_input.get(akai_midimix="E1", akai_lpd8="E2", val_min=0.7, val_max=1.3, val_default=1)
+        coef_noise = meta_input.get(akai_midimix="E0", akai_lpd8="E1", val_min=0, val_max=0.5, val_default=0.15)
+        # latent_noise_sigma = meta_input.get(akai_midimix="E1", akai_lpd8="E2", val_min=0.7, val_max=1.3, val_default=1)
         
         if not do_gray_noise:
             
-            t_rand = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255 * 5
-            t_rand[t_rand < 0.5] = 0
+            do_gaussian_noise = meta_input.get(akai_midimix="E4", button_mode="toggle")
+            if do_gaussian_noise:
+                t_rand = (torch.randn(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255
+            else:
+                t_rand = (torch.rand(cam_img_torch.shape[0], cam_img_torch.shape[1], 3, device=cam_img_torch.device) - 0.5) * coef_noise * 255
+                
+            # t_rand[t_rand < 0.5] = 0
 
 
         else:
-            t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
+            t_rand = (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255
         cam_img_torch += t_rand
         torch_last_diffusion_image += t_rand
         # cam_img_torch += (torch.rand(cam_img_torch.shape, device=cam_img_torch.device)[:,:,0].unsqueeze(2) - 0.5) * coef_noise * 255 * 5
@@ -797,7 +802,7 @@ while True:
     if use_modulated_unet:
         cross_attention_kwargs ={}
         cross_attention_kwargs['modulations'] = modulations
-        cross_attention_kwargs['latent_noise_sigma'] = latent_noise_sigma
+        # cross_attention_kwargs['latent_noise_sigma'] = latent_noise_sigma
     else:
         cross_attention_kwargs = None
     
