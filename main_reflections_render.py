@@ -246,25 +246,69 @@ emotion = random.choice(list_emotions)
 age = random.choice(list_ages)
 prompt = f"photo of a {emotion} and {age} {nationality} person"
 
-
+t_transform_started = 0
 
 #%%
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
 is_transformation_active = False
-p_start_transform = 0.1
-t_transform_started = 0
+
 
 prompt = "photo of a very old and very angry american person"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
 
+start_transform = False
+t_transform_started = time.time()
+is_active_transform = False
+get_new_prompt = False
+num_inference_steps = 30
+
 while True:
-    
-    # handle the number of diffusion strength
-    if not is_transformation_active:
-        if np.random.rand() < p_start_transform:
-            is_transformation_active = True
         
-    get_new_prompt = meta_input.get(akai_midimix='B3', akai_lpd8='A0', button_mode='pressed_once')
+    dt_transform_in = meta_input.get(akai_midimix="A0", val_min=0, val_max=10)
+    dt_transform_stay = meta_input.get(akai_midimix="A1", val_min=0, val_max=10)
+    dt_transform_out = meta_input.get(akai_midimix="A2", val_min=0, val_max=10)
+    
+    num_inference_steps_min = meta_input.get(akai_midimix="B0", val_min=2, val_max=5, val_default=4)
+    num_inference_steps_max = meta_input.get(akai_midimix="B1", val_min=6, val_max=30, val_default=30)
+    
+    p_start_transform = -1 #meta_input.get(akai_midimix="B0", val_min=0, val_max=0.1)
+
+    if not is_active_transform and np.random.rand() < p_start_transform:
+        start_transform = True
+        
+    start_transform_manually = meta_input.get(akai_midimix='B3', akai_lpd8='A0', button_mode='pressed_once')
+    if start_transform_manually:
+        start_transform = True
+        
+    if start_transform:
+        t_transform_started = time.time()
+        get_new_prompt = True
+        start_transform = False
+        is_active_transform = True
+        
+    if is_active_transform:
+        dt_transform = time.time() - t_transform_started
+        
+        # decide which phase we are in
+        if dt_transform >= dt_transform_in + dt_transform_stay + dt_transform_out:
+            is_active_transform = False
+            print(f"phase: transform ended, back to normal")
+        elif dt_transform >= dt_transform_in + dt_transform_stay:
+            fract_transform = (dt_transform - dt_transform_in - dt_transform_stay) / dt_transform_out
+            num_inference_steps = fract_transform*(num_inference_steps_max-num_inference_steps_min) + num_inference_steps_min
+            print(f"phase: transform out: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+        elif dt_transform >= dt_transform_in:
+            fract_transform = (dt_transform - dt_transform_in) / dt_transform_stay
+            num_inference_steps = num_inference_steps_min
+            print(f"phase: transform stay: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+        else:
+            fract_transform = dt_transform / dt_transform_stay
+            num_inference_steps = (1-fract_transform)*(num_inference_steps_max-num_inference_steps_min) + num_inference_steps_min
+            print(f"phase: transform in: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+        
+        num_inference_steps = np.clip(num_inference_steps, num_inference_steps_min, num_inference_steps_max)
+        num_inference_steps = int(np.round(num_inference_steps))
+    
     if get_new_prompt:
         nationality = random.choice(list_nationalities)
         emotion = random.choice(list_emotions)
@@ -272,10 +316,12 @@ while True:
         prompt = f"photo of a {emotion} and {age} {nationality} person"
         print(f"new prompt: {prompt}")
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+        get_new_prompt = False
     
     t0 = time.time()
     torch.manual_seed(420)
-    num_inference_steps = int(meta_input.get(akai_midimix="B2", akai_lpd8="H1", val_min=3, val_max=30, val_default=30))
+    
+    # num_inference_steps = int(meta_input.get(akai_midimix="B2", akai_lpd8="H1", val_min=3, val_max=30, val_default=30))
 
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
@@ -283,9 +329,9 @@ while True:
     
     cropping_coordinates = crop_face_square(cam_img, padding=150)
     if cropping_coordinates is None:
-        renderer.render(cam_img)
+        renderer.render(Image.fromarray(cam_img))
         time.sleep(0.05)
-        # continue
+        continue
     cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
     size_cam_img_cropped_orig = cam_img_cropped.size
     cam_img_cropped = cam_img_cropped.resize(size_diff_img)
