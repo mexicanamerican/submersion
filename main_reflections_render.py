@@ -254,7 +254,8 @@ meta_input = lt.MetaInput()
 def get_prompt():
     # return get_prompt_celebrity()
     # return get_prompt_emo()
-    return get_prompt_nationalities_age_emotion()
+    return get_prompt_facial_features()
+    # return get_prompt_nationalities_age_emotion()
 
 
 def get_prompt_nationalities_age_emotion():
@@ -285,6 +286,12 @@ def get_prompt_celebrity():
 def get_prompt_emo():
     emotion = random.choice(['happy', 'sad'])
     prompt = f"close-up portrait of a {emotion} person"
+    return prompt
+
+def get_prompt_facial_features():
+    attribute = random.choice(['tiny', 'huge'])
+    feature = random.choice(['nose', 'eyes', 'mouth'])
+    prompt = f"close-up portrait of a person with a {attribute} {feature}"
     return prompt
 
 
