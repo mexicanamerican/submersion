@@ -304,6 +304,18 @@ get_new_prompt = False
 num_inference_steps = 30
 t_transform_started = 0
 
+is_experience_active = False
+time_experience_started = 0
+time_experience_stopped = 0
+is_face_present_current_frame = False
+is_face_present_previous_frame = False
+nmb_face_detection_streak_required = 5
+nmb_no_face_detection_streak_required = 5
+
+nmb_face_detection_current = 0
+nmb_no_face_detection_current = 0
+
+
 while True:
     t0 = time.time()
         
@@ -317,6 +329,65 @@ while True:
     p_start_transform = meta_input.get(akai_midimix="B2", val_min=0, val_max=0.1)
     
     manual_strength_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
+    
+    # First check if there is a face present
+    cam_img = cam.get_img()
+    cam_img = np.flip(cam_img, axis=1)
+    cam_img = np.uint8(cam_img)
+    cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2:(cam_img.shape[0] + precrop_shape_cam[0]) // 2, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
+    
+    cropping_coordinates = crop_face_square(cam_img, padding=150)
+    if cropping_coordinates is None:
+        is_face_present_current_frame = False
+    else:
+        is_face_present_current_frame = True
+        
+        
+    # Count the number of subsequent frames where there was a face present
+    if is_face_present_current_frame and is_face_present_previous_frame:
+        nmb_face_detection_current += 1
+    
+    # If this is the first frame where we see a face, reset the counter
+    if is_face_present_current_frame and not is_face_present_previous_frame:
+        nmb_face_detection_current = 0 
+        nmb_no_face_detection_current = 0 
+        
+    # Count the number of subsequent frames where there was NO face present
+    if not is_face_present_current_frame and not is_face_present_previous_frame:
+        nmb_no_face_detection_current += 1
+    
+    # If this is the first frame where we fail to see a face, reset the counter
+    if not is_face_present_current_frame and is_face_present_previous_frame:
+        nmb_no_face_detection_current = 0 
+        nmb_face_detection_current = 0 
+    
+    # print(f"nmb_face_detection_current {nmb_face_detection_current} nmb_no_face_detection_current {nmb_no_face_detection_current}")
+    
+    # use the counters to activate or deactivate the experience
+    if not is_experience_active and nmb_face_detection_current >= nmb_face_detection_streak_required:
+        print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!")
+        is_experience_active = True
+        time_experience_started = time.time()
+        
+    if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
+        is_experience_active = False
+        time_experience_stopped = time.time()
+        print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!")
+        
+    
+    # Cycle the face detection already here, because of continue statement
+    is_face_present_previous_frame = is_face_present_current_frame
+    # Was there a face present as well in the previous frame? If so, then 
+    if not is_experience_active:
+        # print("waiting...")
+        renderer.render(Image.fromarray(cam_img))
+        time.sleep(0.1)
+        continue
+    
+    cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
+    size_cam_img_cropped_orig = cam_img_cropped.size
+    cam_img_cropped = cam_img_cropped.resize(size_diff_img)
+    
 
     if not is_active_transform and not manual_strength_overrider and np.random.rand() < p_start_transform:
         start_transform = True
@@ -390,20 +461,6 @@ while True:
     
     # num_inference_steps = int(meta_input.get(akai_midimix="B2", akai_lpd8="H1", val_min=3, val_max=30, val_default=30))
 
-    cam_img = cam.get_img()
-    cam_img = np.flip(cam_img, axis=1)
-    cam_img = np.uint8(cam_img)
-    cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2:(cam_img.shape[0] + precrop_shape_cam[0]) // 2, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
-    
-    cropping_coordinates = crop_face_square(cam_img, padding=150)
-    if cropping_coordinates is None:
-        renderer.render(Image.fromarray(cam_img))
-        time.sleep(0.05)
-        continue
-    cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
-    size_cam_img_cropped_orig = cam_img_cropped.size
-    cam_img_cropped = cam_img_cropped.resize(size_diff_img)
-    
     # only apply human mask in cam_img_cropped  
     human_mask = human_seg.get_mask(np.asarray(cam_img_cropped))
 
@@ -451,6 +508,10 @@ while True:
         image_show = cam_img_pil
         
     renderer.render(image_show)
+    
+    
+    
+    
     
 
 
