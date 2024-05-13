@@ -256,7 +256,7 @@ def get_prompt():
 
 
 def get_prompt_nationalities_age_emotion():
-    list_nationalities = ["nigerian", "moroccan", "turkish", "persian", "spanish", "american", "japanese", "chinese", "mongolian", "russian", "Brazilian", "Australian", "Egyptian", "Finnish", "Canadian", "Argentinian", "South Korean", "Kenyan", "Ukrainian", "Norwegian"]
+    list_nationalities = ["capo verdian", "nigerian", "moroccan", "turkish", "persian", "spanish", "american", "japanese", "chinese", "mongolian", "russian", "Brazilian", "Australian", "Egyptian", "Finnish", "Canadian", "Argentinian", "South Korean", "Kenyan", "Ukrainian", "Norwegian"]
     list_emotions = ["angry", "sad", "surprised", "happy", "smiling", "furious", "Ecstatic", "Melancholic", "Bewildered", "Content", "Nostalgic", "Anxious"]
     list_ages = ["middle aged", "very old", "very young", "teenager", "Toddler", "Elderly", "Young adult", "In their thirties"]
     
@@ -297,14 +297,14 @@ def get_prompt_facial_features():
 total_time_experience = 2*60 # in seconds
 time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
 nmb_face_detection_streak_required = 5 # switching on the experience (new person)
-nmb_no_face_detection_streak_required = 5 #switching off the experience (person left)
+nmb_no_face_detection_streak_required = 15 #switching off the experience (person left)
 num_inference_steps_max = 50 # maximum
 do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
 num_inference_steps_min_end = 2 # the value at end of experience
-dt_transform_in = 15 # buildup time (linear)
-dt_transform_stay = 10 # how long to stay at current max transform
-dt_transform_out = 8 # return time to camera feed
+dt_transform_in = 12 # buildup time (linear)
+dt_transform_stay = 6 # how long to stay at current max transform
+dt_transform_out = 5 # return time to camera feed
 do_auto_face_y_adjust = True
 
 # AUTO PARAMS
@@ -341,6 +341,10 @@ while True:
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     cam_img = np.uint8(cam_img)
+    
+    if (cam_img.shape[0] - precrop_shape_cam[0]) // 2 - yshift < 0 or (cam_img.shape[0] + precrop_shape_cam[0]) // 2 - yshift >= cam_img.shape[0]:
+        yshift = 0
+    
     cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2 - yshift:(cam_img.shape[0] + precrop_shape_cam[0]) // 2 -yshift, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
     
     cropping_coordinates = crop_face_square(cam_img, padding=padding_face_crop)
