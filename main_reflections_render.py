@@ -12,6 +12,9 @@ cleanup & comments
 try blurring cam image?
 have logprint and log EVERYTHING use verbose levels
 battle proof!
+grab the image and run gpt4 vision. exclude prompts that are too close!
+save the transformed images from each run
+fine-tune the focus
 """
 
 #%%
