@@ -303,7 +303,18 @@ def get_prompt_facial_features():
 
 
 
-#%%
+#%% IMPORTANT PARAMS
+total_time_experience = 2*60 # in seconds
+time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
+nmb_face_detection_streak_required = 5 # switching on the experience (new person)
+nmb_no_face_detection_streak_required = 5 #switching off the experience (person left)
+num_inference_steps_max = 50 # maximum
+do_automatic_experience_progression = True
+num_inference_steps_min_start = 15 # the value at the beginning of exp
+num_inference_steps_min_end = 2 # the value at end of experience
+
+
+
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
 is_transformation_active = False
 list_scores = []
@@ -311,7 +322,10 @@ list_scores = []
 prompt = "photo of a very old and very angry american person"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
 
-time_wait_camfeed = 0.2
+
+
+
+
 
 start_transform = False
 t_transform_started = time.time()
@@ -325,19 +339,11 @@ time_experience_started = 0
 time_experience_stopped = 0
 is_face_present_current_frame = False
 is_face_present_previous_frame = False
-nmb_face_detection_streak_required = 5
-nmb_no_face_detection_streak_required = 5
 
 nmb_face_detection_current = 0
 nmb_no_face_detection_current = 0
-num_inference_steps_max = 50
 
 # time based setup
-do_automatic_experience_progression = True
-total_time_experience = 60
-num_inference_steps_min_start = 7
-num_inference_steps_min_end = 2
-num_inference_steps_max = 40
 fract_experience = 0 # auto
 num_inference_steps_min = 10 # auto
 
@@ -410,6 +416,7 @@ while True:
         # print("waiting...")
         renderer.render(Image.fromarray(cam_img))
         time.sleep(time_wait_camfeed)
+        is_active_transform = False
         continue
     
     
