@@ -254,8 +254,8 @@ meta_input = lt.MetaInput()
 def get_prompt():
     # return get_prompt_celebrity()
     # return get_prompt_emo()
-    return get_prompt_facial_features()
-    # return get_prompt_nationalities_age_emotion()
+    # return get_prompt_facial_features()
+    return get_prompt_nationalities_age_emotion()
 
 
 def get_prompt_nationalities_age_emotion():
@@ -303,6 +303,8 @@ list_scores = []
 
 prompt = "photo of a very old and very angry american person"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+
+time_wait_camfeed = 0.2
 
 start_transform = False
 t_transform_started = time.time()
@@ -385,11 +387,13 @@ while True:
     # Cycle the face detection already here, because of continue statement
     is_face_present_previous_frame = is_face_present_current_frame
     # Was there a face present as well in the previous frame? If so, then 
-    if not is_experience_active:
+    if not is_experience_active or not is_face_present_current_frame:
         # print("waiting...")
         renderer.render(Image.fromarray(cam_img))
-        time.sleep(0.1)
+        time.sleep(time_wait_camfeed)
         continue
+    
+    
     
     cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
     size_cam_img_cropped_orig = cam_img_cropped.size

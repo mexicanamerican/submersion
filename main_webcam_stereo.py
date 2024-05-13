@@ -67,7 +67,7 @@ torch.backends.cudnn.allow_tf32 = False
 #%% VARS
 # shape_cam=(600,800) 
 shape_cam=(300,400) 
-do_compile = False
+do_compile = True
 use_community_prompts = False
 
 sz_renderwin = (512*2, int(512*2*16/9))
@@ -76,7 +76,7 @@ base_w = 20
 base_h = 15
 
 
-resolution_factor = 5 # native is 4
+resolution_factor = 7 # native is 4
 base_w = 16
 base_h = 16
 
@@ -109,7 +109,7 @@ class PromptManager:
         self.use_community_prompts = use_community_prompts
         self.hf_dataset = "Gustavosta/Stable-Diffusion-Prompts"
         # self.hf_dataset = "FredZhang7/stable-diffusion-prompts-2.47M"
-        self.local_prompts_path = "../psychoactive_surface/spaces/good_prompts.txt"
+        self.local_prompts_path = "../psychoactive_surface/good_prompts.txt"
         self.fp_save = "good_prompts_harvested.txt"
         if self.use_community_prompts:
             self.dataset = load_dataset(self.hf_dataset)

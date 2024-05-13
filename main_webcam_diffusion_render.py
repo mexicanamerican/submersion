@@ -80,7 +80,7 @@ shape_cam=(300,400)
 if use_square: 
     shape_cam=(360,360) 
 do_compile = False
-use_community_prompts = True
+use_community_prompts = False
 
 sz_renderwin = (int(512*2.09), int(512*3.85))
 if use_square:
@@ -405,6 +405,7 @@ blender = PromptBlender(pipe)
 
 # Promptmanager
 promptmanager = PromptManager(use_community_prompts)
+#%%
 prompt = promptmanager.get_new_prompt()
 
 prompt = 'Bizarre creature from Hieronymus Bosch painting "A Garden of Earthly Delights" on a schizophrenic ayahuasca trip'
