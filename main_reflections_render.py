@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+
+"""
+face detection on off seems to be broken!
+end of experience?
+
+"""
+
 #%%
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
 import torch
@@ -321,7 +328,16 @@ nmb_no_face_detection_streak_required = 5
 
 nmb_face_detection_current = 0
 nmb_no_face_detection_current = 0
+num_inference_steps_max = 50
 
+# time based setup
+do_automatic_experience_progression = True
+total_time_experience = 60
+num_inference_steps_min_start = 7
+num_inference_steps_min_end = 2
+num_inference_steps_max = 40
+fract_experience = 0 # auto
+num_inference_steps_min = 10 # auto
 
 while True:
     t0 = time.time()
@@ -330,12 +346,15 @@ while True:
     dt_transform_stay = meta_input.get(akai_midimix="A1", val_min=1, val_max=20)
     dt_transform_out = meta_input.get(akai_midimix="A2", val_min=1, val_max=20)
     
-    num_inference_steps_min = meta_input.get(akai_midimix="B0", val_min=2, val_max=5, val_default=4)
-    num_inference_steps_max = meta_input.get(akai_midimix="B1", val_min=6, val_max=50, val_default=50)
+    if not do_automatic_experience_progression:
+        num_inference_steps_min = meta_input.get(akai_midimix="B0", val_min=2, val_max=5, val_default=4)
+        num_inference_steps_max = meta_input.get(akai_midimix="B1", val_min=6, val_max=50, val_default=50)
+    
+
     
     p_start_transform = meta_input.get(akai_midimix="B2", val_min=0, val_max=0.1)
     
-    manual_strength_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
+    manual_num_inference_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
     
     # First check if there is a face present
     cam_img = cam.get_img()
@@ -375,7 +394,7 @@ while True:
         print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!")
         is_experience_active = True
         time_experience_started = time.time()
-        
+
     if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
         is_experience_active = False
         time_experience_stopped = time.time()
@@ -396,7 +415,7 @@ while True:
     cam_img_cropped = cam_img_cropped.resize(size_diff_img)
     
 
-    if not is_active_transform and not manual_strength_overrider and np.random.rand() < p_start_transform:
+    if not is_active_transform and not manual_num_inference_overrider and np.random.rand() < p_start_transform:
         start_transform = True
         
     start_transform_manually = meta_input.get(akai_midimix='C3', akai_lpd8='A0', button_mode='pressed_once')
@@ -448,14 +467,22 @@ while True:
             if not did_print_in:
                 print("phase: starting transform")
                 did_print_in = True
+                if do_automatic_experience_progression:
+                    fract_experience = (time.time() - time_experience_started) / total_time_experience
+                    fract_experience = np.clip(fract_experience, 0, 1)
+                    num_inference_steps_min = fract_experience * (num_inference_steps_min_end - num_inference_steps_min_start) + num_inference_steps_min_start
+                    num_inference_steps_min = int(np.round(num_inference_steps_min))
+                    print(f"Automatic do_time_based num_inference: fract_experience {fract_experience} num_inference_steps_min {num_inference_steps_min}")
+                    
         
         num_inference_steps = np.clip(num_inference_steps, num_inference_steps_min, num_inference_steps_max)
         num_inference_steps = int(np.round(num_inference_steps))
         
     manual_num_inference_steps = meta_input.get(akai_midimix='C5', val_min=num_inference_steps_min, val_max=num_inference_steps_max)
     
-    if manual_strength_overrider:
+    if manual_num_inference_overrider:
         num_inference_steps =int(manual_num_inference_steps)
+    
         
     
     psychophysics_detection = meta_input.get(akai_midimix="H4", button_mode="pressed_once")
@@ -484,13 +511,14 @@ while True:
                     pooled_prompt_embeds=pooled_prompt_embeds,          
                     negative_pooled_prompt_embeds=negative_pooled_prompt_embeds).images[0]
     
-    
     dt = time.time() - t0
     fps = 1/dt
     
     show_fps = meta_input.get(akai_midimix="G3", button_mode="toggle")
     if show_fps:
         print(fps)
+        
+    # print(num_inference_steps)
 
     show_cam = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
     
