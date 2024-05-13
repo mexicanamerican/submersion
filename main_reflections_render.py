@@ -3,8 +3,6 @@
 
 
 """
-face detection on off seems to be broken!
-face autp do_auto_face_y_adjust
 end of experience?
 get rid of midimix
 prompt tuning?
@@ -14,6 +12,7 @@ cleanup & comments
 try blurring cam image?
 autofocus cam
 have logprint and log EVERYTHING use verbose levels
+battle proof!
 """
 
 #%%
@@ -49,21 +48,24 @@ from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
 import random
 
-model_path = hf_hub_download(repo_id="arnabdhar/YOLOv8-Face-Detection", filename="model.pt")
-yolo = YOLO(model_path)
-#%% PARAMETERS
-compile_with_sfast = False
+
+
+#%% DIFFUSION PARAMETERS
 shape_cam= (1080, 1920)
-# shape_cam= (720, 1280)
-precrop_shape_cam = (750, 750)
-size_diff_img = (512, 512)
-size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0])) 
-padding = 120
+size_diff_img = (512, 512) # size of diffusion gen. 512 ideal.
+size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
 human_mask_boundary_relative = 0.1
-guidance_scale = 0.0
+guidance_scale = 0.0 # leave
+
+# Cam & crop parameters
+cam_focus = 300
+autofocus = 0 # 0 is disabled, 1 enabled
+precrop_shape_cam = (750, 750) # we always precrop with this shape
+padding_face_crop = 150 # how much space around the face padded
 # %% INITS
 cam = lt.WebCam(cam_id=0, shape_hw=shape_cam)
-cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, autofocus)
+cam.cam.set(cv2.CAP_PROP_FOCUS, cam_focus)
 
 pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16", local_files_only=True)
 pipe = pipe.to("cuda")
@@ -240,6 +242,10 @@ renderer = lt.Renderer(width=size_render[1], height=size_render[0])
 speech_detector = lt.Speech2Text()
 meta_input = lt.MetaInput()
 
+model_path = hf_hub_download(repo_id="arnabdhar/YOLOv8-Face-Detection", filename="model.pt")
+yolo = YOLO(model_path)
+
+
 #%%
 
 def get_prompt():
@@ -287,7 +293,7 @@ def get_prompt_facial_features():
 
 
 
-#%% IMPORTANT PARAMS
+#%% IMPORTANT PARAMS - MOVE UP LATER
 total_time_experience = 2*60 # in seconds
 time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
 nmb_face_detection_streak_required = 5 # switching on the experience (new person)
@@ -337,7 +343,7 @@ while True:
     cam_img = np.uint8(cam_img)
     cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2 - yshift:(cam_img.shape[0] + precrop_shape_cam[0]) // 2 -yshift, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
     
-    cropping_coordinates = crop_face_square(cam_img, padding=150)
+    cropping_coordinates = crop_face_square(cam_img, padding=padding_face_crop)
     if cropping_coordinates is None:
         is_face_present_current_frame = False
     else:
@@ -386,6 +392,7 @@ while True:
             y2 = cropping_coordinates[3]
             ymean = 0.5 * (y1 + y2)
             yshift = int(precrop_shape_cam[0]/2 - ymean)
+            yshift = np.clip(yshift, 0, int(precrop_shape_cam[0]/2)-1)
             
             
             
