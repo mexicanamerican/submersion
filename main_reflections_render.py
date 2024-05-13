@@ -4,8 +4,16 @@
 
 """
 face detection on off seems to be broken!
+face autp do_auto_face_y_adjust
 end of experience?
-
+get rid of midimix
+prompt tuning?
+gpt4 vision
+try other prompts
+cleanup & comments
+try blurring cam image?
+autofocus cam
+have logprint and log EVERYTHING use verbose levels
 """
 
 #%%
@@ -59,32 +67,8 @@ cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 
 pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float16, variant="fp16", local_files_only=True)
 pipe = pipe.to("cuda")
-# pipe.vae = AutoencoderTiny.from_pretrained('madebyollin/taesdxl', torch_device='cuda', torch_dtype=torch.float16)
-# pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 
-# if compile_with_sfast:
-#     pipe.enable_xformers_memory_efficient_attention()
-#     config = CompilationConfig.Default()
-#     config.enable_xformers = True
-#     config.enable_triton = True
-#     config.enable_cuda_graph = True
-#     pipe = compile(pipe, config)
-    
-    
-# if compile_with_sfast:
-#     from sfast.compilers.diffusion_pipeline_compiler import (compile, CompilationConfig)
-#     config = CompilationConfig.Default()
-#     config.enable_xformers = True
-#     config.enable_triton = True
-#     config.enable_cuda_graph = True
-#     config.enable_jit = True
-#     config.enable_jit_freeze = True
-#     config.trace_scheduler = True
-#     config.enable_cnn_optimization = True
-#     config.preserve_parameters = False
-#     config.prefer_lowp_gemm = True
-#     pipe = compile(pipe, config)
 
 # %% aux
 def _compute_zero_padding(kernel_size: Tuple[int, int]) -> Tuple[int, int]:
@@ -309,23 +293,20 @@ time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthroug
 nmb_face_detection_streak_required = 5 # switching on the experience (new person)
 nmb_no_face_detection_streak_required = 5 #switching off the experience (person left)
 num_inference_steps_max = 50 # maximum
-do_automatic_experience_progression = True
+do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
 num_inference_steps_min_end = 2 # the value at end of experience
+dt_transform_in = 15 # buildup time (linear)
+dt_transform_stay = 10 # how long to stay at current max transform
+dt_transform_out = 8 # return time to camera feed
+do_auto_face_y_adjust = True
 
-
-
+# AUTO PARAMS
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
 is_transformation_active = False
 list_scores = []
-
-prompt = "photo of a very old and very angry american person"
+prompt = "photo of a very young person"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
-
-
-
-
-
 
 start_transform = False
 t_transform_started = time.time()
@@ -346,35 +327,35 @@ nmb_no_face_detection_current = 0
 # time based setup
 fract_experience = 0 # auto
 num_inference_steps_min = 10 # auto
+yshift = 0 #auto
 
 while True:
     t0 = time.time()
-        
-    dt_transform_in = meta_input.get(akai_midimix="A0", val_min=1, val_max=20)
-    dt_transform_stay = meta_input.get(akai_midimix="A1", val_min=1, val_max=20)
-    dt_transform_out = meta_input.get(akai_midimix="A2", val_min=1, val_max=20)
-    
-    if not do_automatic_experience_progression:
-        num_inference_steps_min = meta_input.get(akai_midimix="B0", val_min=2, val_max=5, val_default=4)
-        num_inference_steps_max = meta_input.get(akai_midimix="B1", val_min=6, val_max=50, val_default=50)
-    
-
-    
-    p_start_transform = meta_input.get(akai_midimix="B2", val_min=0, val_max=0.1)
-    
-    manual_num_inference_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
-    
     # First check if there is a face present
     cam_img = cam.get_img()
     cam_img = np.flip(cam_img, axis=1)
     cam_img = np.uint8(cam_img)
-    cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2:(cam_img.shape[0] + precrop_shape_cam[0]) // 2, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
+    cam_img = cam_img[(cam_img.shape[0] - precrop_shape_cam[0]) // 2 - yshift:(cam_img.shape[0] + precrop_shape_cam[0]) // 2 -yshift, (cam_img.shape[1] - precrop_shape_cam[1]) // 2:(cam_img.shape[1] + precrop_shape_cam[1]) // 2]
     
     cropping_coordinates = crop_face_square(cam_img, padding=150)
     if cropping_coordinates is None:
         is_face_present_current_frame = False
     else:
         is_face_present_current_frame = True
+        
+    # dt_transform_in = meta_input.get(akai_midimix="A0", val_min=1, val_max=20)
+    # dt_transform_stay = meta_input.get(akai_midimix="A1", val_min=1, val_max=20)
+    # dt_transform_out = meta_input.get(akai_midimix="A2", val_min=1, val_max=20)
+    
+    if not do_automatic_experience_progression:
+        num_inference_steps_min = meta_input.get(akai_midimix="B0", val_min=2, val_max=5, val_default=4)
+        num_inference_steps_max = meta_input.get(akai_midimix="B1", val_min=6, val_max=50, val_default=50)
+    
+    
+    p_start_transform = meta_input.get(akai_midimix="B2", val_min=0, val_max=0.1)
+    
+    manual_num_inference_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
+    
         
         
     # Count the number of subsequent frames where there was a face present
@@ -395,21 +376,31 @@ while True:
         nmb_no_face_detection_current = 0 
         nmb_face_detection_current = 0 
     
-    # print(f"nmb_face_detection_current {nmb_face_detection_current} nmb_no_face_detection_current {nmb_no_face_detection_current}")
-    
-    # use the counters to activate or deactivate the experience
+    # ACTIVATE EXPERIENCE? use the face counters
     if not is_experience_active and nmb_face_detection_current >= nmb_face_detection_streak_required:
         print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!")
         is_experience_active = True
         time_experience_started = time.time()
+        if do_auto_face_y_adjust:
+            y1 = cropping_coordinates[1]
+            y2 = cropping_coordinates[3]
+            ymean = 0.5 * (y1 + y2)
+            yshift = int(precrop_shape_cam[0]/2 - ymean)
+            
+            
+            
+            
+            
+        
 
+    # DEACTIVATE EXPERIENCE? use the face counters
     if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
         is_experience_active = False
         time_experience_stopped = time.time()
         print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!")
         
     
-    # Cycle the face detection already here, because of continue statement
+    # Cycle the face detection already here, because of continue statement below
     is_face_present_previous_frame = is_face_present_current_frame
     # Was there a face present as well in the previous frame? If so, then 
     if not is_experience_active or not is_face_present_current_frame:
@@ -418,7 +409,6 @@ while True:
         time.sleep(time_wait_camfeed)
         is_active_transform = False
         continue
-    
     
     
     cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
@@ -504,8 +494,6 @@ while True:
     
     torch.manual_seed(420)
     
-    # num_inference_steps = int(meta_input.get(akai_midimix="B2", akai_lpd8="H1", val_min=3, val_max=30, val_default=30))
-
     # only apply human mask in cam_img_cropped  
     human_mask = human_seg.get_mask(np.asarray(cam_img_cropped))
 
@@ -536,21 +524,20 @@ while True:
     if show_cam:
         image_show = cam_img.astype(np.uint8)
     else:
-        # just show image_diffusion_mixed for now
         # Re-insert image_diffusion into cam_img at the cropped position
-        human_mask = human_mask.astype(np.float32)
-        human_mask[-human_mask_boundary:,:] = 0
-        human_mask[:,-human_mask_boundary:] = 0
-        human_mask[:,:human_mask_boundary] = 0
-        human_mask[:human_mask_boundary,:] = 0
-        human_mask = cv2.GaussianBlur(human_mask, (55, 55), 0)
-        if human_mask.max() > 0:
-            human_mask = human_mask/human_mask.max()
-        image_diffusion_mixed = blend_images(np.array(image_diffusion), cam_img_cropped, human_mask)
-        
-        image_diffusion_mixed_resized = image_diffusion_mixed.resize(size_cam_img_cropped_orig)
-        cam_img_pil = Image.fromarray(cam_img)
         try:
+            human_mask = human_mask.astype(np.float32)
+            human_mask[-human_mask_boundary:,:] = 0
+            human_mask[:,-human_mask_boundary:] = 0
+            human_mask[:,:human_mask_boundary] = 0
+            human_mask[:human_mask_boundary,:] = 0
+            human_mask = cv2.GaussianBlur(human_mask, (55, 55), 0)
+            if human_mask.max() > 0:
+                human_mask = human_mask/human_mask.max()
+            image_diffusion_mixed = blend_images(np.array(image_diffusion), cam_img_cropped, human_mask)
+            
+            image_diffusion_mixed_resized = image_diffusion_mixed.resize(size_cam_img_cropped_orig)
+            cam_img_pil = Image.fromarray(cam_img)
             cam_img_pil.paste(image_diffusion_mixed_resized, cropping_coordinates[:2])
         except Exception as e:
             print(f"inserting diffusion image fail: {e}")
