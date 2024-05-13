@@ -43,6 +43,7 @@ import numpy as np
 from diffusers.utils.torch_utils import randn_tensor
 # import random as rn
 
+from util_emocontroller import EmoController
 import numpy as np
 import xformers
 import triton
@@ -377,9 +378,9 @@ cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, 1)
 #     movie_reader = MovieReaderCustom(fp_movie)
 
 # Diffusion Pipe
-pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=True)
+pipe = AutoPipelineForImage2Image.from_pretrained(model_turbo, torch_dtype=torch.float16, variant="fp16", local_files_only=False)
 pipe.to("cuda")
-pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch_dtype=torch.float16, local_files_only=True)
+pipe.vae = AutoencoderTiny.from_pretrained(model_vae, torch_device='cuda', torch_dtype=torch.float16, local_files_only=False)
 pipe.vae = pipe.vae.cuda()
 pipe.set_progress_bar_config(disable=True)
 pipe.unet.forward = forward_modulated.__get__(pipe.unet, UNet2DConditionModel)
@@ -450,6 +451,7 @@ cam_img = cv2.resize(cam_img.astype(np.uint8), (cam_resolution_w, cam_resolution
 last_cam_img_torch = None
 
 meta_input = lt.MetaInput()
+emodisk = EmoController()
 
 memory_matrix = np.linspace(0.1,0.4,cam_img.shape[1])
 memory_matrix = np.expand_dims(np.expand_dims(memory_matrix, 0), -1)
@@ -515,7 +517,10 @@ while True:
     noise_img2img = blender.interpolate_spherical(noise_img2img_orig, noise_img2img_fresh, noise_mixing)
     do_cam_coloring = meta_input.get(akai_midimix="G3", button_mode="toggle")
     do_gray_noise = meta_input.get(akai_midimix="G4", button_mode="toggle")
-    do_record_mic = meta_input.get(akai_midimix="A3", akai_lpd8="A1", button_mode="held_down")
+    # do_record_mic = meta_input.get(akai_midimix="A3", akai_lpd8="A1", button_mode="held_down")
+    
+    emodisk.update()
+    do_record_mic = emodisk.get_value("A0", 'hold') 
     
     if do_record_mic:
         if not speech_detector.audio_recorder.is_recording:
