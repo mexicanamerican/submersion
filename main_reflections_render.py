@@ -511,7 +511,10 @@ while True:
         
         image_diffusion_mixed_resized = image_diffusion_mixed.resize(size_cam_img_cropped_orig)
         cam_img_pil = Image.fromarray(cam_img)
-        cam_img_pil.paste(image_diffusion_mixed_resized, cropping_coordinates[:2])
+        try:
+            cam_img_pil.paste(image_diffusion_mixed_resized, cropping_coordinates[:2])
+        except Exception as e:
+            print(f"inserting diffusion image fail: {e}")
         image_show = cam_img_pil
         
     renderer.render(image_show)
