@@ -10,7 +10,6 @@ gpt4 vision
 try other prompts
 cleanup & comments
 try blurring cam image?
-autofocus cam
 have logprint and log EVERYTHING use verbose levels
 battle proof!
 """
@@ -48,20 +47,23 @@ from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
 import random
 
-
-
 #%% DIFFUSION PARAMETERS
 shape_cam= (1080, 1920)
-size_diff_img = (512, 512) # size of diffusion gen. 512 ideal.
-size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
-human_mask_boundary_relative = 0.1
-guidance_scale = 0.0 # leave
+
 
 # Cam & crop parameters
 cam_focus = 300
 autofocus = 0 # 0 is disabled, 1 enabled
 precrop_shape_cam = (750, 750) # we always precrop with this shape
 padding_face_crop = 150 # how much space around the face padded
+
+
+size_diff_img = (512, 512) # size of diffusion gen. 512 ideal.
+size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
+human_mask_boundary_relative = 0.1
+guidance_scale = 0.0 # leave
+
+
 # %% INITS
 cam = lt.WebCam(cam_id=0, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, autofocus)
@@ -234,8 +236,6 @@ negative_prompt = 'blurry, tiled, wrong, bad art, pixels, amateur drawing, haze'
     
 image_diffusion = Image.fromarray(np.zeros((size_diff_img[1], size_diff_img[0], 3), dtype=np.uint8))
 
-
-
 latents = blender.get_latents()
 
 renderer = lt.Renderer(width=size_render[1], height=size_render[0])
@@ -362,8 +362,6 @@ while True:
     
     manual_num_inference_overrider = meta_input.get(akai_midimix='C4', button_mode='toggle')
     
-        
-        
     # Count the number of subsequent frames where there was a face present
     if is_face_present_current_frame and is_face_present_previous_frame:
         nmb_face_detection_current += 1
@@ -392,19 +390,16 @@ while True:
             y2 = cropping_coordinates[3]
             ymean = 0.5 * (y1 + y2)
             yshift = int(precrop_shape_cam[0]/2 - ymean)
-            yshift = np.clip(yshift, 0, int(precrop_shape_cam[0]/2)-1)
+            yshift = np.clip(yshift, -cam_img.shape[0] //2 +1, cam_img.shape[0] //2 -1 )
+            print(f"Applying yshift: {yshift}")
             
-            
-            
-            
-            
-        
 
     # DEACTIVATE EXPERIENCE? use the face counters
     if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
         is_experience_active = False
         time_experience_stopped = time.time()
         print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!")
+        yshift = 0
         
     
     # Cycle the face detection already here, because of continue statement below
