@@ -3,9 +3,11 @@
 
 
 """
-have logprint and log EVERYTHING use verbose levels
 grab the image and run gpt4 vision. exclude prompts that are too close!
 battle proof!
+    - works offlnie
+    - no akaki
+    - try except handling everywhere (generic fail)
 save the transformed images from each run
 new seed every new run
 
@@ -21,6 +23,7 @@ fine-tune the focus
 
 #%%
 from diffusers import AutoPipelineForText2Image, AutoPipelineForImage2Image
+import os
 import torch
 import time
 from diffusers import AutoencoderTiny
@@ -317,6 +320,7 @@ dt_transform_in = 12 # buildup time (linear)
 dt_transform_stay = 6 # how long to stay at current max transform
 dt_transform_out = 5 # return time to camera feed
 do_auto_face_y_adjust = True
+do_save_images = True # saves the imags at maximum (for debug)
 
 # AUTO PARAMS
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
@@ -346,6 +350,7 @@ fract_experience = 0 # auto
 num_inference_steps_min = 10 # auto
 yshift = 0 #auto
 current_seed = 420
+save_current_image = False
 
 while True:
     t0 = time.time()
@@ -402,6 +407,9 @@ while True:
         is_experience_active = True
         current_seed = np.random.randint(999999999999999)
         time_experience_started = time.time()
+        idx_img = 0 # for saving
+        if do_save_images:
+            save_current_image = True
         if do_auto_face_y_adjust:
             y1 = cropping_coordinates[1]
             y2 = cropping_coordinates[3]
@@ -472,7 +480,6 @@ while True:
             # logger.print(f"phase: transform out: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
             if not did_print_out:
                 logger.print("Entering new phase: Max transform -> Camera feed")
-                
                 did_print_out = True
         elif dt_transform >= dt_transform_in:
             fract_transform = (dt_transform - dt_transform_in) / dt_transform_stay
@@ -480,6 +487,9 @@ while True:
             if not did_print_stay:
                 logger.print("Entering new phase: Staying with Max transform")
                 did_print_stay = True
+                if do_save_images:
+                    save_current_image = True
+                    idx_img += 1
             # logger.print(f"phase: transform stay: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
         else:
             fract_transform = dt_transform / dt_transform_in
@@ -559,6 +569,18 @@ while True:
             image_diffusion_mixed_resized = image_diffusion_mixed.resize(size_cam_img_cropped_orig)
             cam_img_pil = Image.fromarray(cam_img)
             cam_img_pil.paste(image_diffusion_mixed_resized, cropping_coordinates[:2])
+
+            if save_current_image:
+                ar_imgs_folder = "ar_imgs"
+                if not os.path.exists(ar_imgs_folder):
+                    os.makedirs(ar_imgs_folder)
+                timestamp = time.strftime("%y%m%d_%H%M", time.localtime(time_experience_started))
+                filename = f"{timestamp}_{idx_img}.png"
+                cam_img_pil.save(os.path.join(ar_imgs_folder, filename), format='JPEG', quality=90)
+                idx_img += 1
+
+                save_current_image = False
+
         except Exception as e:
             logger.print(f"inserting diffusion image fail: {e}")
         image_show = cam_img_pil
