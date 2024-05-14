@@ -11,9 +11,6 @@ battle proof!
 save the transformed images from each run
 new seed every new run
 
-
-end of experience?
-get rid of midimix
 prompt tuning?
 try other prompts
 cleanup & comments
@@ -43,7 +40,7 @@ from typing import List, Tuple
 import torch.nn as nn
 import torch.nn.functional as F
 from kornia.filters.kernels import get_binary_kernel2d
-from img_utils import pad_image_to_width, pad_image_to_width, blend_images, process_cam_img, stitch_images, weighted_average_images
+from img_utils import pad_image_to_width, blend_images, process_cam_img, stitch_images, weighted_average_images
 from datetime import datetime
 from human_seg import HumanSeg
 torch.set_grad_enabled(False)
@@ -54,6 +51,7 @@ import matplotlib.pyplot as plt
 from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
 import random
+from PIL import ImageOps
 
 #%% DIFFUSION PARAMETERS
 shape_cam= (1080, 1920)
@@ -67,12 +65,17 @@ padding_face_crop = 150 # how much space around the face padded
 
 
 size_diff_img = (512, 512) # size of diffusion gen. 512 ideal.
-size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
+size_render = (1080, 1920)  # render window size
+# size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
 human_mask_boundary_relative = 0.1
 guidance_scale = 0.0 # leave
 
 
+
+
 # %% INITS
+width_cam_padding = int(precrop_shape_cam[0] * size_render[1] / size_render[0])
+
 cam = lt.WebCam(cam_id=0, shape_hw=shape_cam)
 cam.cam.set(cv2.CAP_PROP_AUTOFOCUS, autofocus)
 cam.cam.set(cv2.CAP_PROP_FOCUS, cam_focus)
@@ -235,7 +238,8 @@ def crop_face_square(cam_img, padding=30):
     
     except Exception as e:
         return None
-    
+
+
 
 #%%
 blender = PromptBlender(pipe)
@@ -306,7 +310,6 @@ def get_prompt_facial_features():
 
 
 #%% IMPORTANT PARAMS - MOVE UP LATER
-total_time_experience = 2*60 # in seconds
 time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
 nmb_face_detection_streak_required = 3*5 # switching on the experience (new person)
 nmb_no_face_detection_streak_required = 4*5 #switching off the experience (person left)
@@ -314,9 +317,19 @@ num_inference_steps_max = 50 # maximum
 do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
 num_inference_steps_min_end = 6 # the value at end of experience
+
+
+
+# total_time_experience = 15 # in seconds
+# dt_transform_in = 3 # buildup time (linear)
+# dt_transform_stay = 1 # how long to stay at current max transform
+# dt_transform_out = 1 # return time to camera feed
+
+total_time_experience = 2*60 # in seconds
 dt_transform_in = 12 # buildup time (linear)
 dt_transform_stay = 6 # how long to stay at current max transform
 dt_transform_out = 5 # return time to camera feed
+
 do_auto_face_y_adjust = True
 do_save_images = True # saves the imags at maximum (for debug)
 dt_end_experience_fadeout = 6 # seconds for fadeout
@@ -432,9 +445,9 @@ while True:
     # Cycle the face detection already here, because of continue statement below
     is_face_present_previous_frame = is_face_present_current_frame
     # Was there a face present as well in the previous frame? If so, then 
-    if not is_experience_active or not is_face_present_current_frame:
+    if not is_experience_active:
         # logger.print("waiting...")
-        renderer.render(Image.fromarray(cam_img))
+        renderer.render(pad_image_to_width(Image.fromarray(cam_img), width_cam_padding))
         time.sleep(time_wait_camfeed)
         is_active_transform = False
         continue
@@ -446,11 +459,17 @@ while True:
             img_show = blend_images(Image.fromarray(cam_img), Image.fromarray(0 * cam_img), 1-fract_fadeout)
         else:
             img_show = Image.fromarray(0 * cam_img)
-        renderer.render(img_show)
+        renderer.render(pad_image_to_width(img_show, width_cam_padding))
         time.sleep(time_wait_camfeed)
         continue
-            
     
+    if not is_face_present_current_frame:
+        # logger.print("waiting...")
+        renderer.render(pad_image_to_width(Image.fromarray(cam_img), width_cam_padding))
+        time.sleep(time_wait_camfeed)
+        is_active_transform = False
+        continue
+            
     
     cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
     size_cam_img_cropped_orig = cam_img_cropped.size
@@ -577,7 +596,8 @@ while True:
     show_cam = meta_input.get(akai_midimix="H3", akai_lpd8="D1", button_mode="toggle")
     
     if show_cam:
-        image_show = cam_img.astype(np.uint8)
+        # image_show = cam_img.astype(np.uint8)
+        image_show = pad_image_to_width(image_show, width_cam_padding)
     else:
         # Re-insert image_diffusion into cam_img at the cropped position
         try:
@@ -609,7 +629,8 @@ while True:
         except Exception as e:
             logger.print(f"inserting diffusion image fail: {e}")
         image_show = cam_img_pil
-        
+        image_show = pad_image_to_width(image_show, width_cam_padding)
+    
     renderer.render(image_show)
     
     
