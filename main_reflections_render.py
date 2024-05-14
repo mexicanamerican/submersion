@@ -308,8 +308,8 @@ def get_prompt_facial_features():
 #%% IMPORTANT PARAMS - MOVE UP LATER
 total_time_experience = 2*60 # in seconds
 time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
-nmb_face_detection_streak_required = 5 # switching on the experience (new person)
-nmb_no_face_detection_streak_required = 15 #switching off the experience (person left)
+nmb_face_detection_streak_required = 3*5 # switching on the experience (new person)
+nmb_no_face_detection_streak_required = 4*5 #switching off the experience (person left)
 num_inference_steps_max = 50 # maximum
 do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
