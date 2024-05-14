@@ -259,10 +259,10 @@ logger = lt.LogPrint()
 
 def get_prompt():
     # return get_prompt_celebrity()
-    # return get_prompt_emo()
+    # # return get_prompt_emo()
     # return get_prompt_facial_features()
-    # return get_prompt_nationalities_age_emotion()
     return get_prompt_nationalities_age_emotion()
+    # return get_prompt_nationalities_age_emotion()
 
 
 def get_prompt_nationalities_age_emotion():
@@ -300,9 +300,7 @@ def get_prompt_emo():
     return prompt
 
 def get_prompt_facial_features():
-    attribute = random.choice(['tiny', 'huge'])
-    feature = random.choice(['nose', 'eyes', 'mouth'])
-    prompt = f"close-up portrait of a person with a {attribute} {feature}"
+    prompt = f"photo of a person"
     return prompt
 
 
@@ -315,12 +313,13 @@ nmb_no_face_detection_streak_required = 15 #switching off the experience (person
 num_inference_steps_max = 50 # maximum
 do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
-num_inference_steps_min_end = 5 # the value at end of experience
+num_inference_steps_min_end = 6 # the value at end of experience
 dt_transform_in = 12 # buildup time (linear)
 dt_transform_stay = 6 # how long to stay at current max transform
 dt_transform_out = 5 # return time to camera feed
 do_auto_face_y_adjust = True
 do_save_images = True # saves the imags at maximum (for debug)
+dt_end_experience_fadeout = 6 # seconds for fadeout
 
 # AUTO PARAMS
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
@@ -351,6 +350,8 @@ num_inference_steps_min = 10 # auto
 yshift = 0 #auto
 current_seed = 420
 save_current_image = False
+do_fadeout = False
+time_experience_fadeout_started = 0 #time.time()
 
 while True:
     t0 = time.time()
@@ -419,12 +420,13 @@ while True:
             logger.print(f"Applying camera yshift to center face: {yshift}")
             
 
-    # DEACTIVATE EXPERIENCE? use the face counters
+    # DEACTIVATE EXPERIENCE AND GET READY FOR NEXT VISITOR? use the face counters
     if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
         is_experience_active = False
         time_experience_stopped = time.time()
         logger.print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!", color="green")
         yshift = 0
+        do_fadeout = False
         
     
     # Cycle the face detection already here, because of continue statement below
@@ -436,6 +438,18 @@ while True:
         time.sleep(time_wait_camfeed)
         is_active_transform = False
         continue
+    
+    # Check fadeout
+    if do_fadeout:
+        fract_fadeout = (time.time() - time_experience_fadeout_started)/dt_end_experience_fadeout
+        if fract_fadeout < 1:
+            img_show = blend_images(Image.fromarray(cam_img), Image.fromarray(0 * cam_img), 1-fract_fadeout)
+        else:
+            img_show = Image.fromarray(0 * cam_img)
+        renderer.render(img_show)
+        time.sleep(time_wait_camfeed)
+        continue
+            
     
     
     cam_img_cropped = Image.fromarray(cam_img).crop(cropping_coordinates)
@@ -505,17 +519,28 @@ while True:
                     num_inference_steps_min = int(np.round(num_inference_steps_min))
                     logger.print(f"Automatic do_time_based num_inference: fract_experience {fract_experience:2.2f} num_inference_steps_min {num_inference_steps_min}")
                     
+                    
+                    
         
         num_inference_steps = np.clip(num_inference_steps, num_inference_steps_min, num_inference_steps_max)
         num_inference_steps = int(np.round(num_inference_steps))
         
-    manual_num_inference_steps = meta_input.get(akai_midimix='C5', val_min=num_inference_steps_min, val_max=num_inference_steps_max)
+    manual_num_inference_steps = meta_input.get(akai_midimix='C5', val_min=2, val_max=50)
     
     if manual_num_inference_overrider:
         num_inference_steps =int(manual_num_inference_steps)
     
-        
     
+    # End of experience
+    if do_automatic_experience_progression:
+        fract_experience = (time.time() - time_experience_started) / total_time_experience
+        if fract_experience > 1.0 and not is_active_transform and not do_fadeout:
+            logger.print("THIS IS THE END!", "red")
+            do_fadeout = True
+            time_experience_fadeout_started = time.time()
+    
+        
+    # Psychophysics test
     psychophysics_detection = meta_input.get(akai_midimix="H4", button_mode="pressed_once")
     if psychophysics_detection:
         logger.print(f"captured at fract_transform {fract_transform}")
