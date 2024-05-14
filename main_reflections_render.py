@@ -250,6 +250,7 @@ meta_input = lt.MetaInput()
 model_path = hf_hub_download(repo_id="arnabdhar/YOLOv8-Face-Detection", filename="model.pt")
 yolo = YOLO(model_path)
 
+logger = lt.LogPrint()
 
 #%%
 
@@ -397,7 +398,7 @@ while True:
     
     # ACTIVATE EXPERIENCE? use the face counters
     if not is_experience_active and nmb_face_detection_current >= nmb_face_detection_streak_required:
-        print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!")
+        logger.print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!", color="green")
         is_experience_active = True
         current_seed = np.random.randint(999999999999999)
         time_experience_started = time.time()
@@ -407,14 +408,14 @@ while True:
             ymean = 0.5 * (y1 + y2)
             yshift = int(precrop_shape_cam[0]/2 - ymean)
             yshift = np.clip(yshift, -cam_img.shape[0] //2 +1, cam_img.shape[0] //2 -1 )
-            print(f"Applying yshift: {yshift}")
+            logger.print(f"Applying camera yshift to center face: {yshift}")
             
 
     # DEACTIVATE EXPERIENCE? use the face counters
     if is_experience_active and nmb_no_face_detection_current >= nmb_no_face_detection_streak_required:
         is_experience_active = False
         time_experience_stopped = time.time()
-        print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!")
+        logger.print(f"Stopping experience! Detected NO face for {nmb_no_face_detection_current} consecutive frames!", color="green")
         yshift = 0
         
     
@@ -422,7 +423,7 @@ while True:
     is_face_present_previous_frame = is_face_present_current_frame
     # Was there a face present as well in the previous frame? If so, then 
     if not is_experience_active or not is_face_present_current_frame:
-        # print("waiting...")
+        # logger.print("waiting...")
         renderer.render(Image.fromarray(cam_img))
         time.sleep(time_wait_camfeed)
         is_active_transform = False
@@ -449,11 +450,11 @@ while True:
         did_print_in = False
         did_print_stay = False
         did_print_out = False
-        print(f"start_transform True! {dt_transform_in} {dt_transform_stay} {dt_transform_out}")
+        logger.print(f"New transform upcoming, start_transform=True. dt_transform_in {dt_transform_in} dt_transform_stay {dt_transform_stay} dt_transform_out {dt_transform_out}")
         
     if get_new_prompt:
         prompt = get_prompt()
-        print(f"new prompt: {prompt}")
+        logger.print(f"new prompt: {prompt}", color="blue")
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
         get_new_prompt = False
         
@@ -463,35 +464,36 @@ while True:
         # decide which phase we are in
         if dt_transform >= dt_transform_in + dt_transform_stay + dt_transform_out:
             is_active_transform = False
-            print(f"phase: transform ended, back to normal")
+            logger.print("Entering new phase: Staying with Camera feed")
             num_inference_steps = num_inference_steps_max
         elif dt_transform >= dt_transform_in + dt_transform_stay:
             fract_transform = (dt_transform - dt_transform_in - dt_transform_stay) / dt_transform_out
             num_inference_steps = fract_transform*(num_inference_steps_max-num_inference_steps_min) + num_inference_steps_min
-            # print(f"phase: transform out: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+            # logger.print(f"phase: transform out: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
             if not did_print_out:
-                print("phase: starting transform back")
+                logger.print("Entering new phase: Max transform -> Camera feed")
+                
                 did_print_out = True
         elif dt_transform >= dt_transform_in:
             fract_transform = (dt_transform - dt_transform_in) / dt_transform_stay
             num_inference_steps = num_inference_steps_min
             if not did_print_stay:
-                print("phase: starting staying transformed")
+                logger.print("Entering new phase: Staying with Max transform")
                 did_print_stay = True
-            # print(f"phase: transform stay: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+            # logger.print(f"phase: transform stay: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
         else:
             fract_transform = dt_transform / dt_transform_in
             num_inference_steps = (1-fract_transform)*(num_inference_steps_max-num_inference_steps_min) + num_inference_steps_min
-            # print(f"phase: transform in: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
+            # logger.print(f"phase: transform in: fract_transform {fract_transform} num_inference_steps {num_inference_steps}")
             if not did_print_in:
-                print("phase: starting transform")
+                logger.print("Entering new phase: Camera feed -> Max transform")                
                 did_print_in = True
                 if do_automatic_experience_progression:
                     fract_experience = (time.time() - time_experience_started) / total_time_experience
                     fract_experience = np.clip(fract_experience, 0, 1)
                     num_inference_steps_min = fract_experience * (num_inference_steps_min_end - num_inference_steps_min_start) + num_inference_steps_min_start
                     num_inference_steps_min = int(np.round(num_inference_steps_min))
-                    print(f"Automatic do_time_based num_inference: fract_experience {fract_experience} num_inference_steps_min {num_inference_steps_min}")
+                    logger.print(f"Automatic do_time_based num_inference: fract_experience {fract_experience:2.2f} num_inference_steps_min {num_inference_steps_min}")
                     
         
         num_inference_steps = np.clip(num_inference_steps, num_inference_steps_min, num_inference_steps_max)
@@ -506,7 +508,7 @@ while True:
     
     psychophysics_detection = meta_input.get(akai_midimix="H4", button_mode="pressed_once")
     if psychophysics_detection:
-        print(f"captured at fract_transform {fract_transform}")
+        logger.print(f"captured at fract_transform {fract_transform}")
         list_scores.append(fract_transform)
     
     
@@ -558,7 +560,7 @@ while True:
             cam_img_pil = Image.fromarray(cam_img)
             cam_img_pil.paste(image_diffusion_mixed_resized, cropping_coordinates[:2])
         except Exception as e:
-            print(f"inserting diffusion image fail: {e}")
+            logger.print(f"inserting diffusion image fail: {e}")
         image_show = cam_img_pil
         
     renderer.render(image_show)
