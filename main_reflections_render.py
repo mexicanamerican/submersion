@@ -3,17 +3,19 @@
 
 
 """
+have logprint and log EVERYTHING use verbose levels
+grab the image and run gpt4 vision. exclude prompts that are too close!
+battle proof!
+save the transformed images from each run
+new seed every new run
+
+
 end of experience?
 get rid of midimix
 prompt tuning?
-gpt4 vision
 try other prompts
 cleanup & comments
 try blurring cam image?
-have logprint and log EVERYTHING use verbose levels
-battle proof!
-grab the image and run gpt4 vision. exclude prompts that are too close!
-save the transformed images from each run
 fine-tune the focus
 """
 
@@ -255,6 +257,7 @@ def get_prompt():
     # return get_prompt_celebrity()
     # return get_prompt_emo()
     # return get_prompt_facial_features()
+    # return get_prompt_nationalities_age_emotion()
     return get_prompt_nationalities_age_emotion()
 
 
@@ -283,6 +286,10 @@ def get_prompt_celebrity():
     prompt = f"photo of {random.choice(list_celebs)}"
     return prompt
 
+def get_prompt_face_mouth():
+    prompt = f"close-up portrait of a person with the mouth full open"
+    return prompt
+
 def get_prompt_emo():
     emotion = random.choice(['happy', 'sad'])
     prompt = f"close-up portrait of a {emotion} person"
@@ -304,7 +311,7 @@ nmb_no_face_detection_streak_required = 15 #switching off the experience (person
 num_inference_steps_max = 50 # maximum
 do_automatic_experience_progression = True # Required for automatic increase of effect during experience
 num_inference_steps_min_start = 15 # the value at the beginning of exp
-num_inference_steps_min_end = 2 # the value at end of experience
+num_inference_steps_min_end = 5 # the value at end of experience
 dt_transform_in = 12 # buildup time (linear)
 dt_transform_stay = 6 # how long to stay at current max transform
 dt_transform_out = 5 # return time to camera feed
@@ -337,6 +344,7 @@ nmb_no_face_detection_current = 0
 fract_experience = 0 # auto
 num_inference_steps_min = 10 # auto
 yshift = 0 #auto
+current_seed = 420
 
 while True:
     t0 = time.time()
@@ -391,6 +399,7 @@ while True:
     if not is_experience_active and nmb_face_detection_current >= nmb_face_detection_streak_required:
         print(f"Starting experience! Detected face for {nmb_face_detection_current} consecutive frames!")
         is_experience_active = True
+        current_seed = np.random.randint(999999999999999)
         time_experience_started = time.time()
         if do_auto_face_y_adjust:
             y1 = cropping_coordinates[1]
@@ -501,7 +510,7 @@ while True:
         list_scores.append(fract_transform)
     
     
-    torch.manual_seed(420)
+    torch.manual_seed(current_seed)
     
     # only apply human mask in cam_img_cropped  
     human_mask = human_seg.get_mask(np.asarray(cam_img_cropped))
