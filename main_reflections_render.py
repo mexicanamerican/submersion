@@ -55,21 +55,39 @@ from PIL import ImageOps
 
 #%% DIFFUSION PARAMETERS
 shape_cam= (1080, 1920)
-
+run_fullscreen = True
 
 # Cam & crop parameters
 cam_focus = 300
-autofocus = 0 # 0 is disabled, 1 enabled
-precrop_shape_cam = (750, 750) # we always precrop with this shape
+autofocus = 1 # 0 is disabled, 1 enabled
+precrop_shape_cam = (750, 500) # we always precrop with this shape
 padding_face_crop = 150 # how much space around the face padded
-
-
+yshift_offset = 40 #additional offset to the top for face y centering
+y_black_bottom = 162
 size_diff_img = (512, 512) # size of diffusion gen. 512 ideal.
-size_render = (1080, 1920)  # render window size
-# size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
-human_mask_boundary_relative = 0.1
-guidance_scale = 0.0 # leave
+size_render = (1024, 1280)  # render window size
 
+time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
+nmb_face_detection_streak_required = 3*5 # switching on the experience (new person)
+nmb_no_face_detection_streak_required = 4*5 #switching off the experience (person left)
+num_inference_steps_max = 50 # maximum
+do_automatic_experience_progression = True # Required for automatic increase of effect during experience
+
+# total_time_experience = 15 # in seconds
+# dt_transform_in = 3 # buildup time (linear)
+# dt_transform_stay = 1 # how long to stay at current max transform
+# dt_transform_out = 1 # return time to camera feed
+
+total_time_experience = 2*60 # in seconds
+dt_transform_in = 12 # buildup time (linear)
+dt_transform_stay = 6 # how long to stay at current max transform
+dt_transform_out = 5 # return time to camera feed
+num_inference_steps_min_start = 11 # the value at the beginning of exp
+num_inference_steps_min_end = 5 # the value at end of experience
+
+do_auto_face_y_adjust = True
+do_save_images = True # saves the imags at maximum (for debug)
+dt_end_experience_fadeout = 6 # seconds for fadeout
 
 
 
@@ -167,7 +185,7 @@ def crop_face_square(cam_img, padding=30):
         face_results = yolo(cam_img, verbose=False)
     #    If no face present, no need to do anything
         if len(face_results)==0:
-            renderer.render(cam_img)
+            # renderer.render(cam_img)
             return None
         
         # Initialize variables to store the maximum area and corresponding index
@@ -239,6 +257,25 @@ def crop_face_square(cam_img, padding=30):
     except Exception as e:
         return None
 
+def blacken_bottom_pixels(img_show, y_black_bottom):
+    """
+    Blacken the bottom y_black_bottom pixels of a PIL image.
+
+    Parameters:
+    img_show (PIL.Image): The input image.
+    y_black_bottom (int): The number of pixels from the bottom to blacken.
+
+    Returns:
+    PIL.Image: The modified image with the bottom pixels blackened.
+    """
+    # Convert img_show to a numpy array
+    img_array = np.array(img_show)
+    
+    # Set the bottom y_black_bottom pixels to black
+    img_array[-y_black_bottom:, :] = 0
+    
+    # Convert the numpy array back to a PIL image
+    return Image.fromarray(img_array)
 
 
 #%%
@@ -309,37 +346,15 @@ def get_prompt_facial_features():
 
 
 
-#%% IMPORTANT PARAMS - MOVE UP LATER
-time_wait_camfeed = 0.2 # emulating low fps when we just have the cam feedthrough :)
-nmb_face_detection_streak_required = 3*5 # switching on the experience (new person)
-nmb_no_face_detection_streak_required = 4*5 #switching off the experience (person left)
-num_inference_steps_max = 50 # maximum
-do_automatic_experience_progression = True # Required for automatic increase of effect during experience
-num_inference_steps_min_start = 15 # the value at the beginning of exp
-num_inference_steps_min_end = 6 # the value at end of experience
-
-
-
-# total_time_experience = 15 # in seconds
-# dt_transform_in = 3 # buildup time (linear)
-# dt_transform_stay = 1 # how long to stay at current max transform
-# dt_transform_out = 1 # return time to camera feed
-
-total_time_experience = 2*60 # in seconds
-dt_transform_in = 12 # buildup time (linear)
-dt_transform_stay = 6 # how long to stay at current max transform
-dt_transform_out = 5 # return time to camera feed
-
-do_auto_face_y_adjust = True
-do_save_images = True # saves the imags at maximum (for debug)
-dt_end_experience_fadeout = 6 # seconds for fadeout
-
-# AUTO PARAMS
+#%% AUTO PARAMS
+human_mask_boundary_relative = 0.1
 human_mask_boundary = int(human_mask_boundary_relative*min(size_diff_img))
 is_transformation_active = False
 list_scores = []
 prompt = "photo of a very young person"
 prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = blender.get_prompt_embeds(prompt, negative_prompt)
+# size_render = (1080, int(1080*precrop_shape_cam[1]/precrop_shape_cam[0]))  # render window size
+guidance_scale = 0.0 # leave
 
 start_transform = False
 t_transform_started = time.time()
@@ -429,6 +444,7 @@ while True:
             y2 = cropping_coordinates[3]
             ymean = 0.5 * (y1 + y2)
             yshift = int(precrop_shape_cam[0]/2 - ymean)
+            yshift -= yshift_offset
             yshift = np.clip(yshift, -cam_img.shape[0] //2 +1, cam_img.shape[0] //2 -1 )
             logger.print(f"Applying camera yshift to center face: {yshift}")
             
@@ -447,7 +463,11 @@ while True:
     # Was there a face present as well in the previous frame? If so, then 
     if not is_experience_active:
         # logger.print("waiting...")
-        renderer.render(pad_image_to_width(Image.fromarray(cam_img), width_cam_padding))
+        img_show = pad_image_to_width(Image.fromarray(cam_img), width_cam_padding)
+
+        # Apply the function to img_show
+        img_show = blacken_bottom_pixels(img_show, y_black_bottom)
+        renderer.render(img_show)
         time.sleep(time_wait_camfeed)
         is_active_transform = False
         continue
@@ -459,13 +479,17 @@ while True:
             img_show = blend_images(Image.fromarray(cam_img), Image.fromarray(0 * cam_img), 1-fract_fadeout)
         else:
             img_show = Image.fromarray(0 * cam_img)
-        renderer.render(pad_image_to_width(img_show, width_cam_padding))
+        img_show = pad_image_to_width(img_show, width_cam_padding)
+        img_show = blacken_bottom_pixels(img_show, y_black_bottom)
+        renderer.render(img_show)
         time.sleep(time_wait_camfeed)
         continue
     
     if not is_face_present_current_frame:
         # logger.print("waiting...")
-        renderer.render(pad_image_to_width(Image.fromarray(cam_img), width_cam_padding))
+        img_show = pad_image_to_width(Image.fromarray(cam_img), width_cam_padding)
+        img_show = blacken_bottom_pixels(img_show, y_black_bottom)
+        renderer.render(img_show)
         time.sleep(time_wait_camfeed)
         is_active_transform = False
         continue
@@ -631,6 +655,7 @@ while True:
         image_show = cam_img_pil
         image_show = pad_image_to_width(image_show, width_cam_padding)
     
+    image_show = blacken_bottom_pixels(image_show, y_black_bottom)
     renderer.render(image_show)
     
     
